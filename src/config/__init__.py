@@ -1,0 +1,19 @@
+import os
+
+
+def _bool_env(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() == "true"
+
+
+def _int_env(name: str, default: str) -> int:
+    return int(os.getenv(name, default))
+
+# App
+API_PREFIX = os.getenv("API_PREFIX", "/api")
+DOCS_URL = os.getenv("DOCS_URL", "/api/docs")
+REDOC_URL = os.getenv("REDOC_URL", "/api/redoc")
+OPENAPI_URL = os.getenv("OPENAPI_URL", "/api/openapi.json")
+
+# CORS
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+CORS_ALLOW_CREDENTIALS = _bool_env("CORS_ALLOW_CREDENTIALS", "true")
