@@ -10,7 +10,7 @@ dependencies = [
     "rqark-app==0.3.0",
     "rqark-core==0.2.8",
     "websockets>=17.1",
-    "redis>=8.1.0",
+    "redis[hiredis]>=5.2.0",
 ]
 
 [[tool.uv.index]]
