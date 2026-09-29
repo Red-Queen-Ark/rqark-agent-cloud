@@ -17,3 +17,8 @@ OPENAPI_URL = os.getenv("OPENAPI_URL", "/api/openapi.json")
 # CORS
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 CORS_ALLOW_CREDENTIALS = _bool_env("CORS_ALLOW_CREDENTIALS", "true")
+
+# Redis
+REDIS_SERVER = os.getenv("REDIS_SERVER", "localhost")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_URL = os.getenv("REDIS_URL") or f"redis://{REDIS_SERVER}:{REDIS_PORT}/0"
