@@ -1353,6 +1353,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pywebpush" },
     { name = "redis", extra = ["hiredis"] },
     { name = "rqark-app" },
@@ -1374,6 +1375,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pywebpush", specifier = ">=2.3.0" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5.2.0" },
     { name = "rqark-app", specifier = "==0.3.1", index = "https://gitea.carhyme.top/api/packages/RedQueenArk/pypi/simple" },

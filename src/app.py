@@ -1,4 +1,5 @@
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from src.apps import ROUTERS
@@ -12,6 +13,11 @@ def _auth_error_handler(_: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
 
 
+def _validation_error_handler(_: Request, error: Exception) -> JSONResponse:
+    assert isinstance(error, RequestValidationError)
+    return JSONResponse(status_code=400, content={'error': {'code': 'BAD_REQUEST', 'message': 'Malformed request body.'}})
+
+
 def create_fastapi_app():
     app = FastAPI(
         docs_url=DOCS_URL,
@@ -22,6 +28,7 @@ def create_fastapi_app():
 
     setup_cors(app)
     app.add_exception_handler(AuthError, _auth_error_handler)
+    app.add_exception_handler(RequestValidationError, _validation_error_handler)
 
     for router in ROUTERS:
         api.include_router(router)

@@ -12,6 +12,7 @@ dependencies = [
     "websockets>=17.1",
     "redis[hiredis]>=5.2.0",
     "pywebpush>=2.3.0",
+    "httpx>=0.28.1",
 ]
 
 [[tool.uv.index]]
