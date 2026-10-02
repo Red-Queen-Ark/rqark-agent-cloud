@@ -1,21 +1,8 @@
-from fastapi import APIRouter, FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, FastAPI
 
 from src.apps import ROUTERS
 from src.config import API_PREFIX, DOCS_URL, OPENAPI_URL, REDOC_URL
-from src.middleware import setup_cors
-from src.middleware.auth import AuthError
-
-
-def _auth_error_handler(_: Request, error: Exception) -> JSONResponse:
-    assert isinstance(error, AuthError)
-    return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
-
-
-def _validation_error_handler(_: Request, error: Exception) -> JSONResponse:
-    assert isinstance(error, RequestValidationError)
-    return JSONResponse(status_code=400, content={'error': {'code': 'BAD_REQUEST', 'message': 'Malformed request body.'}})
+from src.middleware import setup_cors, setup_exception_handlers
 
 
 def create_fastapi_app():
@@ -27,8 +14,7 @@ def create_fastapi_app():
     api = APIRouter(prefix=API_PREFIX)
 
     setup_cors(app)
-    app.add_exception_handler(AuthError, _auth_error_handler)
-    app.add_exception_handler(RequestValidationError, _validation_error_handler)
+    setup_exception_handlers(app)
 
     for router in ROUTERS:
         api.include_router(router)
