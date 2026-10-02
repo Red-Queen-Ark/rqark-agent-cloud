@@ -4,6 +4,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from src.apps.chat.event import agent_payload_to_send_json
 from src.apps.chat.helper import ChatSocketHelper
+from rqark_app.cloud.client import DataCloudError
 
 from rqark_core.types.chat import Chunk
 from rqark_core.types.event import AgentPayload
@@ -27,7 +28,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 provider_name: str = info['provider']
                 agent_name: str = info['agent']
                 await chat_helper.chat(content, provider_name, agent_name)
-            except (ValueError, KeyError, TypeError) as error:
+            except (ValueError, KeyError, TypeError, DataCloudError) as error:
                 agent_payload = AgentPayload('', (),  Chunk('error', str(error)))
                 _error = agent_payload_to_send_json(agent_payload)
                 await websocket.send_json(_error)
