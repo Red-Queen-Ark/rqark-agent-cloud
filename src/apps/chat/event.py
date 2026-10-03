@@ -1,8 +1,9 @@
 from fastapi import WebSocket
 from rqark_app.app import AgentApp, AgentPayload, Message, PlanItem
-from rqark_core.types.chat import Chunk, UserMessage, ToolMessage, AssistantMessage, SystemMessage
+from rqark_core.types.chat import AssistantMessage, Chunk, SystemMessage, ToolMessage, UserMessage
 from rqark_core.types.event import AgentPayload
 from rqark_core.types.tool import PlanItem
+
 
 def agent_payload_to_send_json(agent_payload: AgentPayload):
     payload = agent_payload.payload
@@ -13,7 +14,7 @@ def agent_payload_to_send_json(agent_payload: AgentPayload):
         data = []
         for p in payload:
             if isinstance(p, PlanItem):
-                data.append(p.to_dict())    
+                data.append(p.to_dict())
     return {
         'agent_id': agent_payload.agent_id,
         'path': agent_payload.path,

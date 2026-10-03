@@ -1,4 +1,5 @@
 from fastapi import APIRouter, WebSocket
+
 from src.apps.chat.service import chat_websocket
 
 router = APIRouter(tags=['Chat'], prefix='/chat')

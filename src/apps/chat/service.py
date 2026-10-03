@@ -1,19 +1,19 @@
 import json
 from collections import defaultdict
+
 from fastapi import WebSocket, WebSocketDisconnect
-
-from src.apps.chat.event import agent_payload_to_send_json
-from src.apps.chat.helper import ChatSocketHelper
 from rqark_app.cloud.client import DataCloudError
-
 from rqark_core.types.chat import Chunk
 from rqark_core.types.event import AgentPayload
 
+from src.apps.chat.event import agent_payload_to_send_json
+from src.apps.chat.helper import ChatSocketHelper
+
 rooms: dict[str, set[WebSocket]] = defaultdict(set)
-    
+
 async def chat_websocket(websocket: WebSocket, session_id: str):
     await websocket.accept()
-    chat_helper = ChatSocketHelper(websocket)
+    chat_helper = ChatSocketHelper(websocket, session_id)
     valid_token = await chat_helper.is_valid_token()
     if not valid_token:
         await chat_helper.close(4401)

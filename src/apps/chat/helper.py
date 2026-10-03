@@ -1,19 +1,21 @@
 from fastapi import WebSocket
 from rqark_app.app import AgentApp, Session
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
-from rqark_app.types.cloud import CloudConfig
+from rqark_app.config.manager import _build_agent, _build_provider
 from rqark_app.session.storage import CloudStorage
-from rqark_app.config.manager import _build_provider, _build_agent
+from rqark_app.types.cloud import CloudConfig
 
 from src.apps.chat.event import connect_agent_event_to_websocket
 from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL
-    
+
+
 class ChatSocketHelper:
-    def __init__(self, websocket: WebSocket):
+    def __init__(self, websocket: WebSocket, session_id: str):
         self.websocket = websocket
+        self.session_id = session_id
         self.token = websocket.query_params.get('token')
         self.client = RQArkDataCloudClient(CloudConfig(url=DATA_CLOUD_URL, api_key=self.token or ''), timeout=DATA_CLOUD_TIMEOUT)
-        
+
     async def is_valid_token(self):
         if self.token is None:
             return False
@@ -36,8 +38,8 @@ class ChatSocketHelper:
         app = AgentApp(providers, CloudStorage(self.client))
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
         await connect_agent_event_to_websocket(app, self.websocket)
-        return await app.chat(content, agent)
-    
+        return await app.chat(content, agent, session_id=self.session_id)
+
     async def close(self, code: int):
         try:
             await self.client.aclose()
