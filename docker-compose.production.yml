@@ -7,7 +7,7 @@ services:
         - uv_index_username
         - uv_index_password
     environment:
-      - DATA_CLOUD_URL=http://rqark-data-cloud:7302
+      - DATA_CLOUD_URL=http://server:7302
     container_name: ${PROJECT_NAME}-server
     networks:
       - rqark-project
