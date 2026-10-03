@@ -1,4 +1,4 @@
-name: Build and Publish with uv
+name: Deploy
 
 on:
   push:
@@ -10,10 +10,11 @@ jobs:
   release:
     runs-on: carhyme-gitea-runner
     steps:
-    - name: Deploy containers
-      env:
-        REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-        REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-        DOCKER_BUILDKIT: '1'
-      run: |
-        docker compose -f docker-compose.production.yml up -d --build
+      - uses: actions/checkout@v4
+      - name: Deploy containers
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          DOCKER_BUILDKIT: '1'
+        run: |
+          docker compose -f docker-compose.production.yml up -d --build
