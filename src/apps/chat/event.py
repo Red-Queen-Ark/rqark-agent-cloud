@@ -1,5 +1,5 @@
 from fastapi import WebSocket
-from rqark_app.app import AgentApp, AgentPayload, Message, PlanItem
+from rqark_app.app import AgentApp, Message
 from rqark_core.types.chat import AssistantMessage, Chunk, SystemMessage, ToolMessage, UserMessage
 from rqark_core.types.event import AgentPayload
 from rqark_core.types.tool import PlanItem
@@ -49,6 +49,8 @@ async def connect_agent_event_to_websocket(app: AgentApp, websocket: WebSocket):
 
     @app.on_message()
     async def message(ev: AgentPayload[Message]) -> None:
+        if isinstance(ev.payload, ToolMessage):
+            return
         data = agent_payload_to_send_json(ev)
         await websocket.send_json(data)
 
