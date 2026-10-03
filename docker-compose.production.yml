@@ -3,6 +3,11 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.production
+      secrets:
+        - uv_index_username
+        - uv_index_password
+    environment:
+      - DATA_CLOUD_URL=http://rqark-data-cloud:7302
     container_name: ${PROJECT_NAME}-server
     networks:
       - rqark-project
@@ -12,3 +17,9 @@ networks:
   rqark-project:
     name: rqark-project
     external: true
+
+secrets:
+  uv_index_username:
+    environment: REGISTRY_USERNAME
+  uv_index_password:
+    environment: REGISTRY_PASSWORD

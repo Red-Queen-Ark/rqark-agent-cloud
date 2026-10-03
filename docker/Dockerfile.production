@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 
 RUN apt-get update && \
@@ -12,7 +14,11 @@ WORKDIR /app
 
 # Layer caching: install dependencies first (without project)
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN --mount=type=secret,id=uv_index_username \
+    --mount=type=secret,id=uv_index_password \
+    UV_INDEX_GITEA_USERNAME="$(cat /run/secrets/uv_index_username)" \
+    UV_INDEX_GITEA_PASSWORD="$(cat /run/secrets/uv_index_password)" \
+    uv sync --frozen --no-dev --no-install-project
 
 # Copy source code
 COPY main.py ./
@@ -23,7 +29,11 @@ COPY docker/entrypoint.sh docker/entrypoint.sh
 RUN chmod +x docker/entrypoint.sh
 
 # Install the project itself
-RUN uv sync --frozen --no-dev
+RUN --mount=type=secret,id=uv_index_username \
+    --mount=type=secret,id=uv_index_password \
+    UV_INDEX_GITEA_USERNAME="$(cat /run/secrets/uv_index_username)" \
+    UV_INDEX_GITEA_PASSWORD="$(cat /run/secrets/uv_index_password)" \
+    uv sync --frozen --no-dev
 
 EXPOSE 8000
 
