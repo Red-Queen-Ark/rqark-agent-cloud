@@ -1,0 +1,14 @@
+services:
+  agent-cloud:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.production
+    container_name: ${PROJECT_NAME}-server
+    networks:
+      - rqark-project
+    restart: unless-stopped
+
+networks:
+  rqark-project:
+    name: rqark-project
+    external: true

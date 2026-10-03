@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    container_name: ${PROJECT_NAME}-server
     ports:
       - 8000:8000
     restart: unless-stopped
