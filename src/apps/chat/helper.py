@@ -33,15 +33,6 @@ class ChatHelper:
         self.session_id = session_id
         self.client = _build_client(token)
 
-    async def _stored_title(self) -> str:
-        try:
-            info = await self.client.get_session(self.session_id)
-        except DataCloudError as error:
-            if error.status_code == 404:
-                return ''
-            raise
-        return info.get('title') or ''
-
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) > saved:
             return
@@ -68,10 +59,9 @@ class ChatHelper:
         async def collect(ev: AgentPayload[Chunk]) -> None:
             streamed.append(str(ev.payload.content))
 
-        title = await self._stored_title()
-        session = await app.session_mgr.create(self.session_id)
-        session.title = title
-        needs_title = bool(content) and not title
+        await app.session_mgr.load()
+        session = await app.session_mgr.get_or_create(self.session_id)
+        needs_title = bool(content) and not session.title
         saved = len(session.history)
         try:
             await app.chat(content, agent, session_id=self.session_id)
