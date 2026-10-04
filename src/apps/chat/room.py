@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 
 from fastapi import WebSocket
 from redis.asyncio.client import PubSub
@@ -13,6 +14,10 @@ _listeners: dict[str, asyncio.Task[None] | None] = {}
 
 def _channel(session_id: str) -> str:
     return f'chat:{session_id}'
+
+
+def _control_channel(session_id: str) -> str:
+    return f'chat:control:{session_id}'
 
 
 async def _deliver_local(session_id: str, data: str) -> None:
@@ -52,19 +57,20 @@ async def join(session_id: str, websocket: WebSocket) -> None:
     _listeners[session_id] = None if pubsub is None else asyncio.create_task(_forward(session_id, pubsub))
 
 
-async def leave(session_id: str, websocket: WebSocket) -> None:
+async def leave(session_id: str, websocket: WebSocket) -> bool:
     _sockets[session_id].discard(websocket)
     if _sockets.get(session_id):
-        return
+        return False
     _sockets.pop(session_id, None)
     listener = _listeners.pop(session_id, None)
     if listener is None:
-        return
+        return True
     listener.cancel()
     try:
         await listener
     except asyncio.CancelledError:
         pass
+    return True
 
 
 async def publish(session_id: str, payload: dict) -> None:
@@ -80,3 +86,31 @@ async def publish(session_id: str, payload: dict) -> None:
         await redis.publish(_channel(session_id), data)
     except Exception:
         await _deliver_local(session_id, data)
+
+
+async def broadcast_stop(session_id: str) -> None:
+    redis = await get_redis()
+    if redis is None:
+        return
+    try:
+        await redis.publish(_control_channel(session_id), 'stop')
+    except Exception:
+        pass
+
+
+async def listen_stop(session_id: str, on_stop: Callable[[], Awaitable[None]]) -> None:
+    redis = await get_redis()
+    if redis is None:
+        return
+    pubsub = redis.pubsub()
+    try:
+        await pubsub.subscribe(_control_channel(session_id))
+    except Exception:
+        await pubsub.aclose()
+        return
+    try:
+        async for message in pubsub.listen():
+            if message['type'] == 'message':
+                await on_stop()
+    finally:
+        await pubsub.aclose()

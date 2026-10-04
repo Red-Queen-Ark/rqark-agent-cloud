@@ -1,38 +1,36 @@
 import json
 
 from fastapi import WebSocket, WebSocketDisconnect
-from rqark_app.cloud.client import DataCloudError
-from rqark_core.types.chat import Chunk
-from rqark_core.types.event import AgentPayload
 
-from src.apps.chat.event import agent_payload_to_send_json
-from src.apps.chat.helper import ChatSocketHelper
+from src.apps.chat.event import error_event
+from src.apps.chat.helper import authenticate
 from src.apps.chat.room import join, leave
+from src.apps.chat.runner import ChatCommand, acquire_runner, release_runner
 
 
 async def chat_websocket(websocket: WebSocket, session_id: str):
     await websocket.accept()
-    chat_helper = ChatSocketHelper(websocket, session_id)
-    valid_token = await chat_helper.is_valid_token()
-    if not valid_token:
-        await chat_helper.close(4401)
+    token = websocket.query_params.get('token')
+    user = await authenticate(token)
+    if user is None:
+        await websocket.close(code=4401)
         return
+    websocket.state.user = user
+    runner = acquire_runner(session_id, token)
     await join(session_id, websocket)
     try:
         while True:
             data = await websocket.receive_text()
             try:
                 info: dict[str, str] = json.loads(data)
-                content: str = info['content']
-                provider_name: str = info['provider']
-                agent_name: str = info['agent']
-                await chat_helper.chat(content, provider_name, agent_name)
-            except (ValueError, KeyError, TypeError, DataCloudError) as error:
-                agent_payload = AgentPayload('', (), Chunk('error', str(error)))
-                await websocket.send_json(agent_payload_to_send_json(agent_payload))
-                continue
+                if info.get('kind') == 'stop':
+                    runner.stop()
+                else:
+                    runner.submit(ChatCommand(info['content'], info['provider'], info['agent']))
+            except (ValueError, KeyError, TypeError) as error:
+                await websocket.send_json(error_event(str(error)))
     except WebSocketDisconnect:
         pass
     finally:
-        await chat_helper.close(-1)
-        await leave(session_id, websocket)
+        if await leave(session_id, websocket):
+            await release_runner(session_id)

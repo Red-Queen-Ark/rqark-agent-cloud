@@ -22,6 +22,9 @@ def agent_payload_to_send_json(agent_payload: AgentPayload):
         'payload': data
     }
 
+def error_event(message: str) -> dict:
+    return agent_payload_to_send_json(AgentPayload('', (), Chunk('error', message)))
+
 async def connect_agent_event_to_room(app: AgentApp, session_id: str):
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
