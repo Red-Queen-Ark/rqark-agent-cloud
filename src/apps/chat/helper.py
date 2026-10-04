@@ -59,7 +59,7 @@ class ChatHelper:
         if provider is None:
             raise DataCloudError(404, 'PROVIDER_NOT_FOUND', f'provider not found: {provider_name}')
         agent = _build_agent(agent_info)
-        app = AgentApp(providers, CloudStorage(self.client))
+        app = AgentApp(providers, CloudStorage(self.client, source='AGENT_CLOUD', list_source='AGENT_CLOUD'))
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
         await connect_agent_event_to_room(app, self.session_id)
         streamed: list[str] = []
