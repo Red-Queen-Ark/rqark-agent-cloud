@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from src.apps.chat.event import error_event
 from src.apps.chat.helper import ChatHelper
 from src.apps.chat.lock import ChatLock
+from src.apps.chat.replay import clear
 from src.apps.chat.room import broadcast_stop, listen_stop, publish
 
 _BUSY = 'this session already has a running chat, stop it before sending another'
+_STOPPED = 'chat stopped'
 
 
 @dataclass
@@ -57,6 +59,7 @@ class SessionRunner:
                     await publish(self.session_id, error_event(_BUSY))
 
     async def _chat_once(self, command: ChatCommand, lock: ChatLock) -> None:
+        await clear(self.session_id)
         try:
             await self._helper.chat(command.content, command.provider, command.agent)
         except asyncio.CancelledError:
@@ -65,6 +68,7 @@ class SessionRunner:
             await publish(self.session_id, error_event(str(error)))
         finally:
             await lock.release()
+            await clear(self.session_id)
 
     async def _stop(self) -> None:
         await broadcast_stop(self.session_id)
@@ -80,7 +84,7 @@ class SessionRunner:
             await chat
         except asyncio.CancelledError:
             pass
-        await publish(self.session_id, error_event('chat stopped'))
+        await publish(self.session_id, error_event(_STOPPED))
 
     async def shutdown(self) -> None:
         for task in (self._worker, self._control):

@@ -3,6 +3,7 @@ from rqark_core.types.chat import AssistantMessage, Chunk, SystemMessage, ToolMe
 from rqark_core.types.event import AgentPayload
 from rqark_core.types.tool import PlanItem
 
+from src.apps.chat.replay import record
 from src.apps.chat.room import publish
 
 
@@ -25,35 +26,40 @@ def agent_payload_to_send_json(agent_payload: AgentPayload):
 def error_event(message: str) -> dict:
     return agent_payload_to_send_json(AgentPayload('', (), Chunk('error', message)))
 
+async def _emit(session_id: str, agent_payload: AgentPayload) -> None:
+    data = agent_payload_to_send_json(agent_payload)
+    await record(session_id, data)
+    await publish(session_id, data)
+
 async def connect_agent_event_to_room(app: AgentApp, session_id: str):
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
 
     @app.on_content()
     async def content(ev: AgentPayload[Chunk]) -> None:
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
 
     @app.on_tool_calls()
     async def tool_calls(ev: AgentPayload[Chunk]) -> None:
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
 
     @app.on_tool_result()
     async def tool_result(ev: AgentPayload[ToolMessage]) -> None:
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
 
     @app.on_error()
     async def error(ev: AgentPayload[Chunk]) -> None:
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
 
     @app.on_message()
     async def message(ev: AgentPayload[Message]) -> None:
         if isinstance(ev.payload, ToolMessage):
             return
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
 
     @app.on_plan()
     async def plan(ev: AgentPayload[list[PlanItem]]) -> None:
         if ev.path or ':' not in ev.agent_id:
             return
-        await publish(session_id, agent_payload_to_send_json(ev))
+        await _emit(session_id, ev)
