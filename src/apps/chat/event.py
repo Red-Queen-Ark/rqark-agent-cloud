@@ -1,8 +1,9 @@
-from fastapi import WebSocket
 from rqark_app.app import AgentApp, Message
 from rqark_core.types.chat import AssistantMessage, Chunk, SystemMessage, ToolMessage, UserMessage
 from rqark_core.types.event import AgentPayload
 from rqark_core.types.tool import PlanItem
+
+from src.apps.chat.room import publish
 
 
 def agent_payload_to_send_json(agent_payload: AgentPayload):
@@ -21,42 +22,35 @@ def agent_payload_to_send_json(agent_payload: AgentPayload):
         'payload': data
     }
 
-async def connect_agent_event_to_websocket(app: AgentApp, websocket: WebSocket):
+async def connect_agent_event_to_room(app: AgentApp, session_id: str):
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))
 
     @app.on_content()
     async def content(ev: AgentPayload[Chunk]) -> None:
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))
 
     @app.on_tool_calls()
     async def tool_calls(ev: AgentPayload[Chunk]) -> None:
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))
 
     @app.on_tool_result()
     async def tool_result(ev: AgentPayload[ToolMessage]) -> None:
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))
 
     @app.on_error()
     async def error(ev: AgentPayload[Chunk]) -> None:
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))
 
     @app.on_message()
     async def message(ev: AgentPayload[Message]) -> None:
         if isinstance(ev.payload, ToolMessage):
             return
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))
 
     @app.on_plan()
     async def plan(ev: AgentPayload[list[PlanItem]]) -> None:
         if ev.path or ':' not in ev.agent_id:
             return
-        data = agent_payload_to_send_json(ev)
-        await websocket.send_json(data)
+        await publish(session_id, agent_payload_to_send_json(ev))

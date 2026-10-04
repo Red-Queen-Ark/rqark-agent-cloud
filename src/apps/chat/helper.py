@@ -5,7 +5,7 @@ from rqark_app.config.manager import _build_agent, _build_provider
 from rqark_app.session.storage import CloudStorage
 from rqark_app.types.cloud import CloudConfig
 
-from src.apps.chat.event import connect_agent_event_to_websocket
+from src.apps.chat.event import connect_agent_event_to_room
 from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL
 
 
@@ -46,7 +46,7 @@ class ChatSocketHelper:
         agent = _build_agent(agent_info)
         app = AgentApp(providers, CloudStorage(self.client))
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
-        await connect_agent_event_to_websocket(app, self.websocket)
+        await connect_agent_event_to_room(app, self.session_id)
         title = await self._stored_title()
         session = await app.session_mgr.create(self.session_id)
         session.title = title
