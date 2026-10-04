@@ -26,6 +26,15 @@ class ChatSocketHelper:
             return False
         return True
 
+    async def _stored_title(self) -> str:
+        try:
+            info = await self.client.get_session(self.session_id)
+        except DataCloudError as error:
+            if error.status_code == 404:
+                return ''
+            raise
+        return info.get('title') or ''
+
     async def chat(self, content: str, provider_name: str, agent_name: str) -> Session:
         agent_info = next((info for info in await self.client.list_agents() if info.get('name') == agent_name), None)
         if agent_info is None:
@@ -38,7 +47,14 @@ class ChatSocketHelper:
         app = AgentApp(providers, CloudStorage(self.client))
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
         await connect_agent_event_to_websocket(app, self.websocket)
-        return await app.chat(content, agent, session_id=self.session_id)
+        title = await self._stored_title()
+        session = await app.session_mgr.create(self.session_id)
+        session.title = title
+        needs_title = bool(content) and not title
+        session = await app.chat(content, agent, session_id=self.session_id)
+        if needs_title:
+            await app.chat_helper.gen_title(session.uuid, content)
+        return session
 
     async def close(self, code: int):
         try:
