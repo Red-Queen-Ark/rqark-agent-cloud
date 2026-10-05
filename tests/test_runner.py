@@ -21,6 +21,7 @@ class FakeHelper:
         self.calls: list[tuple] = []
         self.closed = False
         self.started = asyncio.Event()
+        self.persisted = False
         FakeHelper.instances.append(self)
 
     async def chat(self, content, provider, agent):
@@ -28,6 +29,7 @@ class FakeHelper:
         self.started.set()
         if FakeHelper.behavior is not None:
             await FakeHelper.behavior(self, content, provider, agent)
+        self.persisted = True
 
     async def close(self):
         self.closed = True
@@ -291,7 +293,7 @@ async def test_commands_are_processed_after_cancel_save_failure(env):
     assert len(FakeHelper.instances[0].calls) == 2
 
 
-async def test_replay_is_reset_per_turn_and_kept_after_chat(monkeypatch, room_env):
+async def test_replay_is_cleared_at_turn_start(monkeypatch, room_env):
     FakeHelper.instances.clear()
     release = asyncio.Event()
 
@@ -322,9 +324,62 @@ async def test_replay_is_reset_per_turn_and_kept_after_chat(monkeypatch, room_en
     runner.submit(ChatCommand('hi', 'p', 'a'))
     await wait_until(lambda: FakeHelper.instances[0].started.is_set())
     assert await replay.read('s12') == []
-
-    await replay.record('s12', {'n': 1})
     release.set()
     await wait_until(lambda: 's12' not in runner_module._runners)
-    assert await replay.read('s12') == [{'n': 1}]
-    FakeHelper.behavior = None
+
+
+async def test_replay_is_cleared_after_persisted_chat(monkeypatch, room_env):
+    FakeHelper.instances.clear()
+
+    async def behavior(self, content, provider, agent):
+        await replay.record('s13', {'n': 1})
+
+    FakeHelper.behavior = behavior
+
+    async def noop_publish(session_id, payload):
+        return None
+
+    async def no_redis():
+        return None
+
+    monkeypatch.setattr(runner_module, 'ChatHelper', FakeHelper)
+    monkeypatch.setattr(runner_module, 'listen_stop', never_stop)
+    monkeypatch.setattr(runner_module, 'publish', noop_publish)
+    monkeypatch.setattr(runner_module, 'has_clients', lambda session_id: True)
+    monkeypatch.setattr(lock_module, 'get_redis', no_redis)
+    runner_module._runners.clear()
+
+    runner = acquire_runner('s13', 't')
+    runner.submit(ChatCommand('hi', 'p', 'a'))
+    await wait_until(lambda: runner._chat is not None and runner._chat.done())
+    assert FakeHelper.instances[0].persisted is True
+    assert await replay.read('s13') == []
+
+
+async def test_replay_is_kept_when_chat_not_persisted(monkeypatch, room_env):
+    FakeHelper.instances.clear()
+
+    async def behavior(self, content, provider, agent):
+        await replay.record('s14', {'n': 1})
+        raise DataCloudError(500, 'BOOM', 'provider exploded')
+
+    FakeHelper.behavior = behavior
+
+    async def noop_publish(session_id, payload):
+        return None
+
+    async def no_redis():
+        return None
+
+    monkeypatch.setattr(runner_module, 'ChatHelper', FakeHelper)
+    monkeypatch.setattr(runner_module, 'listen_stop', never_stop)
+    monkeypatch.setattr(runner_module, 'publish', noop_publish)
+    monkeypatch.setattr(runner_module, 'has_clients', lambda session_id: True)
+    monkeypatch.setattr(lock_module, 'get_redis', no_redis)
+    runner_module._runners.clear()
+
+    runner = acquire_runner('s14', 't')
+    runner.submit(ChatCommand('hi', 'p', 'a'))
+    await wait_until(lambda: runner._chat is not None and runner._chat.done())
+    assert FakeHelper.instances[0].persisted is False
+    assert await replay.read('s14') == [{'n': 1}]

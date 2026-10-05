@@ -101,6 +101,10 @@ class SessionRunner:
             if lock.lost:
                 logger.error('chat ran without lock session=%s', self.session_id)
             await lock.release()
+            if self._helper.persisted:
+                await clear(self.session_id)
+            else:
+                logger.warning('chat not persisted, replay kept session=%s', self.session_id)
 
     async def _stop(self) -> None:
         await broadcast_stop(self.session_id)

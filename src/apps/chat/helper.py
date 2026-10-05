@@ -36,17 +36,22 @@ class ChatHelper:
     def __init__(self, session_id: str, token: str | None):
         self.session_id = session_id
         self.client = _build_client(token)
+        self.persisted = False
 
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) > saved:
+            logger.warning('session already saved session=%s streamed=%d', self.session_id, len(assistant))
+            self.persisted = True
             return
         logger.warning('saving partial session=%s streamed=%d', self.session_id, len(assistant))
         session.history.append(UserMessage(content))
         if assistant:
             session.history.append(AssistantMessage(assistant))
         await app.session_mgr.save(session.uuid)
+        self.persisted = True
 
     async def chat(self, content: str, provider_name: str, agent_name: str) -> Session:
+        self.persisted = False
         agents = await self.client.list_agents()
         agent_info = next((info for info in agents if info.get('name') == agent_name), None)
         if agent_info is None:
@@ -77,6 +82,7 @@ class ChatHelper:
         except asyncio.CancelledError:
             await self._save_partial(app, session, saved, content, ''.join(streamed))
             raise
+        self.persisted = True
         if needs_title:
             await app.chat_helper.gen_title(session.uuid, content)
         return session
