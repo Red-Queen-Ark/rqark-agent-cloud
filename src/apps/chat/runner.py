@@ -1,11 +1,15 @@
 import asyncio
+import logging
 from dataclasses import dataclass
+from time import monotonic
 
 from src.apps.chat.event import error_event
 from src.apps.chat.helper import ChatHelper
 from src.apps.chat.lock import ChatLock
 from src.apps.chat.replay import clear
 from src.apps.chat.room import broadcast_stop, has_clients, listen_stop, publish
+
+logger = logging.getLogger(__name__)
 
 _BUSY = 'this session already has a running chat, stop it before sending another'
 _STOPPED = 'chat stopped'
@@ -39,6 +43,7 @@ class SessionRunner:
         self._chat: asyncio.Task[None] | None = None
         self._worker = asyncio.create_task(self._run())
         self._control = asyncio.create_task(listen_stop(session_id, self._cancel))
+        logger.info('runner created session=%s', session_id)
 
     def submit(self, command: ChatCommand) -> None:
         self._commands.put_nowait(command)
@@ -63,25 +68,35 @@ class SessionRunner:
                 if not self._busy() and not has_clients(self.session_id):
                     await self._retire()
                     return
+                logger.debug('retire deferred session=%s busy=%s', self.session_id, self._busy())
             elif isinstance(command, StopCommand):
+                logger.info('stop command session=%s', self.session_id)
                 await self._stop()
             elif self._busy():
+                logger.warning('chat rejected busy session=%s', self.session_id)
                 await publish(self.session_id, error_event(_BUSY))
             else:
                 lock = ChatLock(self.session_id)
                 if await lock.acquire():
                     self._start_chat(command, lock)
                 else:
+                    logger.warning('chat rejected locked session=%s', self.session_id)
                     await publish(self.session_id, error_event(_BUSY))
 
     async def _chat_once(self, command: ChatCommand, lock: ChatLock) -> None:
         await clear(self.session_id)
+        started = monotonic()
+        logger.info('chat started session=%s provider=%s agent=%s', self.session_id, command.provider, command.agent)
         try:
             await self._helper.chat(command.content, command.provider, command.agent)
         except asyncio.CancelledError:
+            logger.warning('chat cancelled session=%s elapsed=%.1fs', self.session_id, monotonic() - started)
             raise
         except Exception as error:
+            logger.exception('chat failed session=%s elapsed=%.1fs error=%s', self.session_id, monotonic() - started, error)
             await publish(self.session_id, error_event(str(error)))
+        else:
+            logger.info('chat finished session=%s elapsed=%.1fs', self.session_id, monotonic() - started)
         finally:
             await lock.release()
             await clear(self.session_id)
@@ -94,6 +109,7 @@ class SessionRunner:
         chat = self._chat
         if chat is None or chat.done():
             return
+        logger.warning('cancelling running chat session=%s', self.session_id)
         self._chat = None
         chat.cancel()
         try:
@@ -111,6 +127,7 @@ class SessionRunner:
         except asyncio.CancelledError:
             pass
         await self._helper.close()
+        logger.info('runner retired session=%s', self.session_id)
 
 
 _runners: dict[str, SessionRunner] = {}

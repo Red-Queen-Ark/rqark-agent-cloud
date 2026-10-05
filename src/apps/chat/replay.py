@@ -1,6 +1,9 @@
 import json
+import logging
 
 from src.utils.redis import get_redis
+
+logger = logging.getLogger(__name__)
 
 _TTL = 3600
 
@@ -15,8 +18,8 @@ async def clear(session_id: str) -> None:
         return
     try:
         await redis.delete(_key(session_id))
-    except Exception:
-        pass
+    except Exception as error:
+        logger.debug('replay clear failed session=%s error=%s', session_id, error)
 
 
 async def record(session_id: str, payload: dict) -> None:
@@ -29,8 +32,8 @@ async def record(session_id: str, payload: dict) -> None:
         pipeline.rpush(key, json.dumps(payload))
         pipeline.expire(key, _TTL)
         await pipeline.execute()
-    except Exception:
-        pass
+    except Exception as error:
+        logger.debug('replay record failed session=%s error=%s', session_id, error)
 
 
 async def read(session_id: str) -> list[dict]:
@@ -39,7 +42,8 @@ async def read(session_id: str) -> list[dict]:
         return []
     try:
         items = await redis.lrange(_key(session_id), 0, -1)
-    except Exception:
+    except Exception as error:
+        logger.debug('replay read failed session=%s error=%s', session_id, error)
         return []
     events: list[dict] = []
     for item in items:

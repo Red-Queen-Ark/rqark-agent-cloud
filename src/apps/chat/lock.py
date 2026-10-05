@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from uuid import uuid4
 
 from redis.asyncio import Redis
 
 from src.utils.redis import get_redis
+
+logger = logging.getLogger(__name__)
 
 _TTL = 30
 
@@ -24,11 +27,13 @@ class ChatLock:
     async def acquire(self) -> bool:
         redis = await get_redis()
         if redis is None:
+            logger.warning('lock degraded no redis key=%s', self._key)
             return True
         try:
             if not await self._try(redis):
                 return False
-        except Exception:
+        except Exception as error:
+            logger.warning('lock acquire failed key=%s error=%s', self._key, error)
             return True
         self._redis = redis
         self._heartbeat = asyncio.create_task(self._renew())
@@ -41,7 +46,8 @@ class ChatLock:
                 return
             try:
                 await self._redis.eval(_RENEW, 1, self._key, self._owner, _TTL)
-            except Exception:
+            except Exception as error:
+                logger.warning('lock renew failed key=%s error=%s', self._key, error)
                 return
 
     async def release(self) -> None:
@@ -57,5 +63,5 @@ class ChatLock:
             return
         try:
             await redis.eval(_RELEASE, 1, self._key, self._owner)
-        except Exception:
-            pass
+        except Exception as error:
+            logger.warning('lock release failed key=%s error=%s', self._key, error)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 
@@ -7,6 +8,8 @@ from fastapi import WebSocket
 from redis.asyncio.client import PubSub
 
 from src.utils.redis import get_redis
+
+logger = logging.getLogger(__name__)
 
 _sockets: dict[str, set[WebSocket]] = defaultdict(set)
 _listeners: dict[str, asyncio.Task[None] | None] = {}
@@ -24,7 +27,10 @@ async def _deliver_local(session_id: str, data: str) -> None:
     sockets = list(_sockets.get(session_id, ()))
     if not sockets:
         return
-    await asyncio.gather(*(websocket.send_text(data) for websocket in sockets), return_exceptions=True)
+    results = await asyncio.gather(*(websocket.send_text(data) for websocket in sockets), return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning('deliver failed session=%s error=%s', session_id, result)
 
 
 async def _forward(session_id: str, pubsub: PubSub) -> None:
@@ -43,7 +49,8 @@ async def _subscribe(session_id: str) -> PubSub | None:
     pubsub = redis.pubsub()
     try:
         await pubsub.subscribe(_channel(session_id))
-    except Exception:
+    except Exception as error:
+        logger.warning('pubsub subscribe failed session=%s error=%s', session_id, error)
         await pubsub.aclose()
         return None
     return pubsub
@@ -88,7 +95,8 @@ async def publish(session_id: str, payload: dict) -> None:
         return
     try:
         await redis.publish(_channel(session_id), data)
-    except Exception:
+    except Exception as error:
+        logger.warning('publish failed session=%s error=%s', session_id, error)
         await _deliver_local(session_id, data)
 
 
@@ -98,8 +106,8 @@ async def broadcast_stop(session_id: str) -> None:
         return
     try:
         await redis.publish(_control_channel(session_id), 'stop')
-    except Exception:
-        pass
+    except Exception as error:
+        logger.warning('broadcast stop failed session=%s error=%s', session_id, error)
 
 
 async def listen_stop(session_id: str, on_stop: Callable[[], Awaitable[None]]) -> None:
@@ -109,7 +117,8 @@ async def listen_stop(session_id: str, on_stop: Callable[[], Awaitable[None]]) -
     pubsub = redis.pubsub()
     try:
         await pubsub.subscribe(_control_channel(session_id))
-    except Exception:
+    except Exception as error:
+        logger.warning('listen stop subscribe failed session=%s error=%s', session_id, error)
         await pubsub.aclose()
         return
     try:

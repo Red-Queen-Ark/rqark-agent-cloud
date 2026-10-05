@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from rqark_app.app import AgentApp, Session
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
@@ -11,6 +12,8 @@ from rqark_core.types.event import AgentPayload
 from src.apps.chat.event import connect_agent_event_to_room
 from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL
 
+logger = logging.getLogger(__name__)
+
 
 def _build_client(token: str | None) -> RQArkDataCloudClient:
     return RQArkDataCloudClient(CloudConfig(url=DATA_CLOUD_URL, api_key=token or ''), timeout=DATA_CLOUD_TIMEOUT)
@@ -22,7 +25,8 @@ async def authenticate(token: str | None) -> dict | None:
     client = _build_client(token)
     try:
         return await client.me()
-    except DataCloudError:
+    except DataCloudError as error:
+        logger.warning('authenticate failed error=%s', error)
         return None
     finally:
         await client.aclose()
@@ -36,18 +40,22 @@ class ChatHelper:
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) > saved:
             return
+        logger.warning('saving partial session=%s streamed=%d', self.session_id, len(assistant))
         session.history.append(UserMessage(content))
         if assistant:
             session.history.append(AssistantMessage(assistant))
         await app.session_mgr.save(session.uuid)
 
     async def chat(self, content: str, provider_name: str, agent_name: str) -> Session:
-        agent_info = next((info for info in await self.client.list_agents() if info.get('name') == agent_name), None)
+        agents = await self.client.list_agents()
+        agent_info = next((info for info in agents if info.get('name') == agent_name), None)
         if agent_info is None:
+            logger.error('agent not found session=%s agent=%s', self.session_id, agent_name)
             raise DataCloudError(404, 'AGENT_NOT_FOUND', f'agent not found: {agent_name}')
         providers = [_build_provider(info) for info in await self.client.list_providers()]
         provider = next((p for p in providers if p.name == provider_name), None)
         if provider is None:
+            logger.error('provider not found session=%s provider=%s', self.session_id, provider_name)
             raise DataCloudError(404, 'PROVIDER_NOT_FOUND', f'provider not found: {provider_name}')
         agent = _build_agent(agent_info)
         app = AgentApp(providers, CloudStorage(self.client, source='AGENT_CLOUD', list_source='AGENT_CLOUD'))
@@ -63,6 +71,7 @@ class ChatHelper:
         session = await app.session_mgr.get_or_create(self.session_id)
         needs_title = bool(content) and not session.title
         saved = len(session.history)
+        logger.info('chat request session=%s provider=%s agent=%s context=%d', self.session_id, provider_name, agent_name, saved)
         try:
             await app.chat(content, agent, session_id=self.session_id)
         except asyncio.CancelledError:
