@@ -6,8 +6,10 @@ from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
 from rqark_app.config.manager import _build_agent, _build_provider
 from rqark_app.session.storage import CloudStorage
 from rqark_app.types.cloud import CloudConfig
+from rqark_app.types.session import message_from_dict, parse_dt
 from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
 from rqark_core.types.event import AgentPayload
+from rqark_core.types.tool import PlanItem
 
 from src.apps.chat.event import connect_agent_event_to_room
 from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL
@@ -50,6 +52,23 @@ class ChatHelper:
         await app.session_mgr.save(session.uuid)
         self.persisted = True
 
+    async def _load_session(self, app: AgentApp) -> None:
+        try:
+            info = await self.client.get_session(self.session_id)
+        except DataCloudError as error:
+            if error.status_code != 404:
+                raise
+            return
+        messages = await self.client.list_session_messages(self.session_id)
+        app.session_mgr.sessions_map[self.session_id] = Session(
+            uuid=info['id'],
+            created_at=parse_dt(info['created_at']),
+            updated_at=parse_dt(info['updated_at']),
+            title=info.get('title') or '',
+            plan_items=[PlanItem(**item) for item in info.get('plan_items') or []],
+            history=[message_from_dict(message['data']) for message in messages],
+        )
+
     async def chat(self, content: str, provider_name: str, agent_name: str) -> Session:
         self.persisted = False
         agents = await self.client.list_agents()
@@ -72,7 +91,7 @@ class ChatHelper:
         async def collect(ev: AgentPayload[Chunk]) -> None:
             streamed.append(str(ev.payload.content))
 
-        await app.session_mgr.load()
+        await self._load_session(app)
         session = await app.session_mgr.get_or_create(self.session_id)
         needs_title = bool(content) and not session.title
         saved = len(session.history)

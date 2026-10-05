@@ -12,12 +12,32 @@ from src.apps.chat import helper as helper_module
 class FakeClient:
     def __init__(self, token):
         self.token = token
+        self.calls: list[str] = []
+        self.session_info: dict | None = {'id': 's1', 'title': '', 'plan_items': [], 'created_at': '2026-01-01T00:00:00+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'}
+        self.messages: list[dict] = []
+        self.get_session_error: DataCloudError | None = None
 
     async def list_agents(self):
+        self.calls.append('list_agents')
         return [{'name': 'a'}]
 
     async def list_providers(self):
+        self.calls.append('list_providers')
         return [{'name': 'p'}]
+
+    async def get_session(self, uuid):
+        self.calls.append('get_session')
+        if self.get_session_error is not None:
+            raise self.get_session_error
+        return self.session_info or {}
+
+    async def list_session_messages(self, uuid):
+        self.calls.append('list_session_messages')
+        return self.messages
+
+    async def list_sessions(self, source=None):
+        self.calls.append('list_sessions')
+        return []
 
     async def aclose(self):
         return None
@@ -39,17 +59,17 @@ class FakeProviderManager:
 
 
 class FakeSessionManager:
-    def __init__(self, session, fail_save=False):
-        self.session = session
-        self.loads = 0
+    def __init__(self, fail_save=False):
+        self.sessions_map: dict[str, Session] = {}
         self.saved: list[str] = []
         self.fail_save = fail_save
 
-    async def load(self):
-        self.loads += 1
-
     async def get_or_create(self, session_id):
-        return self.session
+        if session_id in self.sessions_map:
+            return self.sessions_map[session_id]
+        session = Session(uuid=session_id)
+        self.sessions_map[session_id] = session
+        return session
 
     async def save(self, uuid):
         if self.fail_save:
@@ -76,7 +96,7 @@ class FakeApp:
     def __init__(self, providers, storage):
         FakeApp.last = self
         self.provider_mgr = FakeProviderManager(providers)
-        self.session_mgr = FakeSessionManager(Session(uuid='s1'), FakeApp.fail_save)
+        self.session_mgr = FakeSessionManager(FakeApp.fail_save)
         self.chat_helper = FakeInnerHelper()
         self._content = None
 
@@ -135,7 +155,7 @@ async def test_cancelled_chat_saves_partial_content_and_is_persisted(helper_env)
     with pytest.raises(asyncio.CancelledError):
         await helper.chat('hi', 'p', 'a')
 
-    session = FakeApp.last.session_mgr.session
+    session = FakeApp.last.session_mgr.sessions_map['s1']
     assert helper.persisted is True
     assert FakeApp.last.session_mgr.saved == ['s1']
     assert [type(message).__name__ for message in session.history] == ['UserMessage', 'AssistantMessage']
@@ -159,7 +179,7 @@ async def test_failed_partial_save_is_not_persisted(helper_env):
 
 async def test_already_saved_history_is_persisted_without_saving(helper_env):
     async def behavior(app):
-        app.session_mgr.session.history.append(UserMessage('already in cloud'))
+        app.session_mgr.sessions_map['s1'].history.append(UserMessage('already in cloud'))
         raise asyncio.CancelledError()
 
     FakeApp.behavior = behavior
@@ -199,6 +219,60 @@ async def test_persisted_flag_is_reset_each_turn(helper_env):
     with pytest.raises(DataCloudError):
         await helper.chat('bye', 'p', 'a')
 
+    assert helper.persisted is False
+
+
+async def test_session_is_loaded_with_two_requests(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [{'seq': 0, 'data': {'role': 'user', 'content': [{'type': 'text', 'text': 'older'}], 'created_at': '2026-01-01T00:00:00+00:00'}}]
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't')
+    await helper.chat('hi', 'p', 'a')
+
+    client = seen[0]
+    assert 'list_sessions' not in client.calls
+    assert client.calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages']
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [message.content for message in session.history] == ['older']
+    assert session.title == ''
+    assert FakeApp.last.session_mgr.saved == ['s1']
+
+
+async def test_missing_session_is_created_empty(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        client.get_session_error = DataCloudError(404, 'NOT_FOUND', 'missing')
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't')
+    await helper.chat('hi', 'p', 'a')
+
+    client = seen[0]
+    assert client.calls == ['list_agents', 'list_providers', 'get_session']
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert session.history == []
+
+
+async def test_session_load_error_is_raised(helper_env, monkeypatch):
+    def build(token):
+        client = FakeClient(token)
+        client.get_session_error = DataCloudError(500, 'INTERNAL', 'cloud down')
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't')
+    with pytest.raises(DataCloudError):
+        await helper.chat('hi', 'p', 'a')
     assert helper.persisted is False
 
 
