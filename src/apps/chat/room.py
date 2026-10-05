@@ -49,6 +49,10 @@ async def _subscribe(session_id: str) -> PubSub | None:
     return pubsub
 
 
+def has_clients(session_id: str) -> bool:
+    return bool(_sockets.get(session_id))
+
+
 async def join(session_id: str, websocket: WebSocket) -> None:
     _sockets[session_id].add(websocket)
     if session_id in _listeners:

@@ -5,7 +5,7 @@ from src.apps.chat.event import error_event
 from src.apps.chat.helper import ChatHelper
 from src.apps.chat.lock import ChatLock
 from src.apps.chat.replay import clear
-from src.apps.chat.room import broadcast_stop, listen_stop, publish
+from src.apps.chat.room import broadcast_stop, has_clients, listen_stop, publish
 
 _BUSY = 'this session already has a running chat, stop it before sending another'
 _STOPPED = 'chat stopped'
@@ -23,7 +23,12 @@ class StopCommand:
     pass
 
 
-type Command = ChatCommand | StopCommand
+@dataclass
+class RetireCommand:
+    pass
+
+
+type Command = ChatCommand | StopCommand | RetireCommand
 
 
 class SessionRunner:
@@ -41,20 +46,31 @@ class SessionRunner:
     def stop(self) -> None:
         self._commands.put_nowait(StopCommand())
 
+    def request_retire(self) -> None:
+        self._commands.put_nowait(RetireCommand())
+
     def _busy(self) -> bool:
         return self._chat is not None and not self._chat.done()
+
+    def _start_chat(self, command: ChatCommand, lock: ChatLock) -> None:
+        self._chat = asyncio.create_task(self._chat_once(command, lock))
+        self._chat.add_done_callback(lambda _: self.request_retire())
 
     async def _run(self) -> None:
         while True:
             command = await self._commands.get()
-            if isinstance(command, StopCommand):
+            if isinstance(command, RetireCommand):
+                if not self._busy() and not has_clients(self.session_id):
+                    await self._retire()
+                    return
+            elif isinstance(command, StopCommand):
                 await self._stop()
             elif self._busy():
                 await publish(self.session_id, error_event(_BUSY))
             else:
                 lock = ChatLock(self.session_id)
                 if await lock.acquire():
-                    self._chat = asyncio.create_task(self._chat_once(command, lock))
+                    self._start_chat(command, lock)
                 else:
                     await publish(self.session_id, error_event(_BUSY))
 
@@ -86,15 +102,14 @@ class SessionRunner:
             pass
         await publish(self.session_id, error_event(_STOPPED))
 
-    async def shutdown(self) -> None:
-        for task in (self._worker, self._control):
-            task.cancel()
-        for task in (self._worker, self._control):
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        await self._cancel()
+    async def _retire(self) -> None:
+        if _runners.get(self.session_id) is self:
+            _runners.pop(self.session_id, None)
+        self._control.cancel()
+        try:
+            await self._control
+        except asyncio.CancelledError:
+            pass
         await self._helper.close()
 
 
@@ -109,7 +124,7 @@ def acquire_runner(session_id: str, token: str | None) -> SessionRunner:
     return runner
 
 
-async def release_runner(session_id: str) -> None:
-    runner = _runners.pop(session_id, None)
+def request_retire(session_id: str) -> None:
+    runner = _runners.get(session_id)
     if runner is not None:
-        await runner.shutdown()
+        runner.request_retire()
