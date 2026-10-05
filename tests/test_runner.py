@@ -19,6 +19,7 @@ class FakeHelper:
         self.session_id = session_id
         self.token = token
         self.calls: list[tuple] = []
+        self.updated_tokens: list[str | None] = []
         self.closed = False
         self.started = asyncio.Event()
         self.persisted = False
@@ -30,6 +31,10 @@ class FakeHelper:
         if FakeHelper.behavior is not None:
             await FakeHelper.behavior(self, content, provider, agent)
         self.persisted = True
+
+    async def update_token(self, token):
+        self.updated_tokens.append(token)
+        self.token = token
 
     async def close(self):
         self.closed = True
@@ -116,8 +121,19 @@ def error_messages(state):
     return messages
 
 
+async def test_acquire_runner_adopts_a_new_token(env):
+    runner = await acquire_runner('s20', 'old')
+    same = await acquire_runner('s20', 'old')
+    assert same is runner
+    assert runner._helper.token == 'old'
+
+    updated = await acquire_runner('s20', 'new')
+    assert updated is runner
+    assert runner._helper.token == 'new'
+
+
 async def test_chat_completes(env):
-    runner = acquire_runner('s1', 't')
+    runner = await acquire_runner('s1', 't')
 
     async def behavior(self, content, provider, agent):
         return None
@@ -129,7 +145,7 @@ async def test_chat_completes(env):
 
 
 async def test_chat_error_is_published_and_runner_survives(env):
-    runner = acquire_runner('s2', 't')
+    runner = await acquire_runner('s2', 't')
 
     async def behavior(self, content, provider, agent):
         raise DataCloudError(500, 'BOOM', 'provider exploded')
@@ -145,7 +161,7 @@ async def test_chat_error_is_published_and_runner_survives(env):
 
 
 async def test_stop_cancels_chat_and_notifies(env):
-    runner = acquire_runner('s3', 't')
+    runner = await acquire_runner('s3', 't')
 
     async def behavior(self, content, provider, agent):
         await asyncio.sleep(3600)
@@ -165,7 +181,7 @@ async def test_stop_cancels_chat_and_notifies(env):
 
 async def test_chat_keeps_running_after_client_disconnect(env):
     env.clients = False
-    runner = acquire_runner('s4', 't')
+    runner = await acquire_runner('s4', 't')
     release = asyncio.Event()
 
     async def behavior(self, content, provider, agent):
@@ -181,7 +197,7 @@ async def test_chat_keeps_running_after_client_disconnect(env):
 
 async def test_runner_retires_when_chat_done_without_clients(env):
     env.clients = False
-    runner = acquire_runner('s5', 't')
+    runner = await acquire_runner('s5', 't')
     runner.submit(ChatCommand('hi', 'p', 'a'))
     await wait_until(lambda: 's5' not in runner_module._runners)
     assert FakeHelper.instances[0].closed is True
@@ -189,7 +205,7 @@ async def test_runner_retires_when_chat_done_without_clients(env):
 
 async def test_retire_is_deferred_while_busy(env):
     env.clients = False
-    runner = acquire_runner('s6', 't')
+    runner = await acquire_runner('s6', 't')
     release = asyncio.Event()
 
     async def behavior(self, content, provider, agent):
@@ -206,7 +222,7 @@ async def test_retire_is_deferred_while_busy(env):
 
 
 async def test_retire_is_skipped_while_clients_connected(env):
-    runner = acquire_runner('s7', 't')
+    runner = await acquire_runner('s7', 't')
     runner.request_retire()
     await asyncio.sleep(0.05)
     assert 's7' in runner_module._runners
@@ -218,7 +234,7 @@ async def test_retire_is_skipped_while_clients_connected(env):
 
 async def test_chat_submitted_after_retire_still_runs(env):
     env.clients = False
-    runner = acquire_runner('s8', 't')
+    runner = await acquire_runner('s8', 't')
     release = asyncio.Event()
 
     async def behavior(self, content, provider, agent):
@@ -240,7 +256,7 @@ async def test_chat_submitted_after_retire_still_runs(env):
 
 
 async def test_second_chat_while_busy_is_rejected(env):
-    runner = acquire_runner('s9', 't')
+    runner = await acquire_runner('s9', 't')
     release = asyncio.Event()
 
     async def behavior(self, content, provider, agent):
@@ -256,7 +272,7 @@ async def test_second_chat_while_busy_is_rejected(env):
 
 
 async def test_stop_notifies_even_when_cancel_save_fails(env):
-    runner = acquire_runner('s10', 't')
+    runner = await acquire_runner('s10', 't')
 
     async def behavior(self, content, provider, agent):
         try:
@@ -273,7 +289,7 @@ async def test_stop_notifies_even_when_cancel_save_fails(env):
 
 
 async def test_commands_are_processed_after_cancel_save_failure(env):
-    runner = acquire_runner('s11', 't')
+    runner = await acquire_runner('s11', 't')
 
     async def behavior(self, content, provider, agent):
         try:
@@ -320,7 +336,7 @@ async def test_replay_is_cleared_at_turn_start(monkeypatch, room_env):
     runner_module._runners.clear()
 
     await replay.record('s12', {'stale': True})
-    runner = acquire_runner('s12', 't')
+    runner = await acquire_runner('s12', 't')
     runner.submit(ChatCommand('hi', 'p', 'a'))
     await wait_until(lambda: FakeHelper.instances[0].started.is_set())
     assert await replay.read('s12') == []
@@ -349,7 +365,7 @@ async def test_replay_is_cleared_after_persisted_chat(monkeypatch, room_env):
     monkeypatch.setattr(lock_module, 'get_redis', no_redis)
     runner_module._runners.clear()
 
-    runner = acquire_runner('s13', 't')
+    runner = await acquire_runner('s13', 't')
     runner.submit(ChatCommand('hi', 'p', 'a'))
     await wait_until(lambda: runner._chat is not None and runner._chat.done())
     assert FakeHelper.instances[0].persisted is True
@@ -378,7 +394,7 @@ async def test_replay_is_kept_when_chat_not_persisted(monkeypatch, room_env):
     monkeypatch.setattr(lock_module, 'get_redis', no_redis)
     runner_module._runners.clear()
 
-    runner = acquire_runner('s14', 't')
+    runner = await acquire_runner('s14', 't')
     runner.submit(ChatCommand('hi', 'p', 'a'))
     await wait_until(lambda: runner._chat is not None and runner._chat.done())
     assert FakeHelper.instances[0].persisted is False

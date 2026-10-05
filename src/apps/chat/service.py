@@ -21,7 +21,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         return
     websocket.state.user = user
     await join(session_id, websocket)
-    runner = acquire_runner(session_id, token)
+    runner = await acquire_runner(session_id, token)
     logger.info('websocket connected session=%s', session_id)
     try:
         while True:

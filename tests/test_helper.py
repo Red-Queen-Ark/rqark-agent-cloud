@@ -13,6 +13,7 @@ class FakeClient:
     def __init__(self, token):
         self.token = token
         self.calls: list[str] = []
+        self.closed = False
         self.session_info: dict | None = {'id': 's1', 'title': '', 'plan_items': [], 'created_at': '2026-01-01T00:00:00+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'}
         self.messages: list[dict] = []
         self.get_session_error: DataCloudError | None = None
@@ -40,7 +41,7 @@ class FakeClient:
         return []
 
     async def aclose(self):
-        return None
+        self.closed = True
 
 
 class FakeProvider:
@@ -274,6 +275,59 @@ async def test_session_load_error_is_raised(helper_env, monkeypatch):
     with pytest.raises(DataCloudError):
         await helper.chat('hi', 'p', 'a')
     assert helper.persisted is False
+
+
+async def test_update_token_rebuilds_the_client(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 'old-token')
+    first = helper.client
+
+    await helper.update_token('new-token')
+
+    assert helper.client is not first
+    assert helper.client.token == 'new-token'
+    assert first.closed is True
+    assert helper.token == 'new-token'
+
+
+async def test_update_token_ignores_the_same_token(helper_env, monkeypatch):
+    built: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 'same')
+    await helper.update_token('same')
+    await helper.update_token('same')
+    assert len(built) == 1
+    assert helper.client.closed is False
+
+
+async def test_chat_uses_the_updated_token(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 'stale')
+    await helper.update_token('fresh')
+    await helper.chat('hi', 'p', 'a')
+
+    assert seen[1].token == 'fresh'
+    assert seen[1].calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages']
 
 
 async def test_agent_not_found_is_not_persisted(helper_env):

@@ -37,8 +37,17 @@ async def authenticate(token: str | None) -> dict | None:
 class ChatHelper:
     def __init__(self, session_id: str, token: str | None):
         self.session_id = session_id
+        self.token = token or ''
         self.client = _build_client(token)
         self.persisted = False
+
+    async def update_token(self, token: str | None) -> None:
+        if (token or '') == self.token:
+            return
+        previous, self.client = self.client, _build_client(token)
+        self.token = token or ''
+        logger.info('chat token updated session=%s', self.session_id)
+        await previous.aclose()
 
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) > saved:

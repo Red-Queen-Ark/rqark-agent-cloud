@@ -56,11 +56,18 @@ async def ok_user(token):
     return {'id': 'u1'}
 
 
+def fake_acquire(runner):
+    async def acquire(session_id, token):
+        return runner
+
+    return acquire
+
+
 def make_env(monkeypatch):
     runner = StubRunner()
     retired = []
     monkeypatch.setattr(service_module, 'authenticate', ok_user)
-    monkeypatch.setattr(service_module, 'acquire_runner', lambda session_id, token: runner)
+    monkeypatch.setattr(service_module, 'acquire_runner', fake_acquire(runner))
     monkeypatch.setattr(service_module, 'request_retire', lambda session_id: retired.append(session_id))
     return runner, retired
 

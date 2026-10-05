@@ -54,6 +54,9 @@ class SessionRunner:
     def request_retire(self) -> None:
         self._commands.put_nowait(RetireCommand())
 
+    async def update_token(self, token: str | None) -> None:
+        await self._helper.update_token(token)
+
     def _busy(self) -> bool:
         return self._chat is not None and not self._chat.done()
 
@@ -138,11 +141,13 @@ class SessionRunner:
 _runners: dict[str, SessionRunner] = {}
 
 
-def acquire_runner(session_id: str, token: str | None) -> SessionRunner:
+async def acquire_runner(session_id: str, token: str | None) -> SessionRunner:
     runner = _runners.get(session_id)
     if runner is None:
         runner = SessionRunner(session_id, token)
         _runners[session_id] = runner
+        return runner
+    await runner.update_token(token)
     return runner
 
 
