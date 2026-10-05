@@ -66,3 +66,4 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = []
 filterwarnings = ["default"]
+pythonpath = ["."]
