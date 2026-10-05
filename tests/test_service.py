@@ -1,10 +1,8 @@
-import asyncio
 import inspect
 from types import SimpleNamespace
 
 from starlette.websockets import WebSocketDisconnect
 
-from src.apps.chat import room
 from src.apps.chat import service as service_module
 
 
@@ -77,22 +75,17 @@ async def test_disconnect_requests_retire(monkeypatch, room_env):
     assert retired == ['s1']
 
 
-async def test_disconnect_after_listener_death_requests_retire(monkeypatch, room_env):
+async def test_retire_is_requested_even_when_leave_fails(monkeypatch, room_env):
     runner, retired = make_env(monkeypatch)
+    real_leave = service_module.leave
 
-    async def kill_listener():
-        room_env.drop_connections()
-        await room.publish('s2', {'n': 1})
-        listener = room._listeners.get('s2')
-        if listener is not None:
-            await asyncio.gather(listener, return_exceptions=True)
+    async def broken_leave(session_id, websocket):
+        await real_leave(session_id, websocket)
+        raise ConnectionError('leave boom')
 
-    conn = FakeConn(['{"kind":"chat","content":"hi","provider":"p","agent":"a"}', kill_listener])
+    monkeypatch.setattr(service_module, 'leave', broken_leave)
+    conn = FakeConn([])
 
-    raised = False
-    try:
-        await service_module.chat_websocket(conn, 's2')
-    except ConnectionError:
-        raised = True
+    await service_module.chat_websocket(conn, 's4')
 
-    assert retired == ['s2'], f'cleanup skipped after listener died (leave raised={raised})'
+    assert retired == ['s4']

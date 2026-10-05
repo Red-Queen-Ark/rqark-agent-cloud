@@ -6,6 +6,7 @@ import pytest
 from rqark_app.cloud.client import DataCloudError
 
 from src.apps.chat import lock as lock_module
+from src.apps.chat import replay
 from src.apps.chat import runner as runner_module
 from src.apps.chat.runner import ChatCommand, SessionRunner, acquire_runner
 
@@ -288,3 +289,42 @@ async def test_commands_are_processed_after_cancel_save_failure(env):
     runner.submit(ChatCommand('again', 'p', 'a'))
     await wait_until(lambda: len(FakeHelper.instances[0].calls) == 2)
     assert len(FakeHelper.instances[0].calls) == 2
+
+
+async def test_replay_is_reset_per_turn_and_kept_after_chat(monkeypatch, room_env):
+    FakeHelper.instances.clear()
+    release = asyncio.Event()
+
+    async def behavior(self, content, provider, agent):
+        await release.wait()
+
+    FakeHelper.behavior = behavior
+
+    async def noop_publish(session_id, payload):
+        return None
+
+    async def noop_broadcast(session_id):
+        return None
+
+    async def no_redis():
+        return None
+
+    monkeypatch.setattr(runner_module, 'ChatHelper', FakeHelper)
+    monkeypatch.setattr(runner_module, 'listen_stop', never_stop)
+    monkeypatch.setattr(runner_module, 'publish', noop_publish)
+    monkeypatch.setattr(runner_module, 'broadcast_stop', noop_broadcast)
+    monkeypatch.setattr(runner_module, 'has_clients', lambda session_id: False)
+    monkeypatch.setattr(lock_module, 'get_redis', no_redis)
+    runner_module._runners.clear()
+
+    await replay.record('s12', {'stale': True})
+    runner = acquire_runner('s12', 't')
+    runner.submit(ChatCommand('hi', 'p', 'a'))
+    await wait_until(lambda: FakeHelper.instances[0].started.is_set())
+    assert await replay.read('s12') == []
+
+    await replay.record('s12', {'n': 1})
+    release.set()
+    await wait_until(lambda: 's12' not in runner_module._runners)
+    assert await replay.read('s12') == [{'n': 1}]
+    FakeHelper.behavior = None

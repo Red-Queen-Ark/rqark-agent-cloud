@@ -43,14 +43,48 @@ async def test_lock_degrades_without_redis(monkeypatch):
 
 
 async def test_lock_keeps_renewing_on_transient_error(room_env, monkeypatch):
-    monkeypatch.setattr(lock_module, '_TTL', 0.2)
+    monkeypatch.setattr(lock_module, '_TTL', 0.3)
     lock = ChatLock('s5')
     assert await lock.acquire() is True
     room_env.renew_fail = True
     await asyncio.sleep(0.25)
     room_env.renew_fail = False
+    assert lock.lost is False
     assert lock._heartbeat is not None and not lock._heartbeat.done()
     await lock.release()
+
+
+async def test_lock_recovers_from_transient_errors(room_env, monkeypatch):
+    monkeypatch.setattr(lock_module, '_TTL', 0.3)
+    lock = ChatLock('s6')
+    assert await lock.acquire() is True
+    room_env.renew_fail = True
+    await asyncio.sleep(0.15)
+    room_env.renew_fail = False
+    await asyncio.sleep(0.1)
+    assert lock.lost is False
+    other = ChatLock('s6')
+    assert await other.acquire() is False
+    await lock.release()
+
+
+async def test_lock_reports_loss_when_owner_is_replaced(room_env, monkeypatch):
+    monkeypatch.setattr(lock_module, '_TTL', 0.3)
+    lock = ChatLock('s7')
+    assert await lock.acquire() is True
+    room_env.store['chat:busy:s7'] = 'stolen'
+    await asyncio.sleep(0.15)
+    assert lock.lost is True
+    assert lock._heartbeat is not None and lock._heartbeat.done()
+    await lock.release()
+
+
+async def test_release_keeps_key_owned_by_someone_else(room_env):
+    lock = ChatLock('s8')
+    assert await lock.acquire() is True
+    room_env.store['chat:busy:s8'] = 'stolen'
+    await lock.release()
+    assert room_env.store['chat:busy:s8'] == 'stolen'
 
 
 async def test_lock_survives_for_whole_chat(room_env, monkeypatch):

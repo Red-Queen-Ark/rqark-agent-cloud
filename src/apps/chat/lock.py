@@ -14,12 +14,21 @@ _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del
 _RENEW = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
 
 
+def _interval() -> float:
+    return max(_TTL / 3, 0.05)
+
+
+def _retry_delay() -> float:
+    return max(_TTL / 30, 0.01)
+
+
 class ChatLock:
     def __init__(self, session_id: str):
         self._key = f'chat:busy:{session_id}'
         self._owner = uuid4().hex
         self._redis: Redis | None = None
         self._heartbeat: asyncio.Task[None] | None = None
+        self.lost = False
 
     async def _try(self, redis: Redis) -> bool:
         return bool(await redis.set(self._key, self._owner, nx=True, ex=_TTL))
@@ -40,15 +49,22 @@ class ChatLock:
         return True
 
     async def _renew(self) -> None:
+        delay = _interval()
         while True:
-            await asyncio.sleep(_TTL / 2)
+            await asyncio.sleep(delay)
             if self._redis is None:
                 return
             try:
-                await self._redis.eval(_RENEW, 1, self._key, self._owner, _TTL)
+                renewed = await self._redis.eval(_RENEW, 1, self._key, self._owner, _TTL)
             except Exception as error:
                 logger.warning('lock renew failed key=%s error=%s', self._key, error)
+                delay = _retry_delay()
+                continue
+            if not renewed:
+                self.lost = True
+                logger.error('lock lost key=%s owner=%s', self._key, self._owner)
                 return
+            delay = _interval()
 
     async def release(self) -> None:
         heartbeat, self._heartbeat = self._heartbeat, None

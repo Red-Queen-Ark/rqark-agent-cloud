@@ -8,6 +8,8 @@ from src.apps.chat import lock as lock_module
 from src.apps.chat import replay as replay_module
 from src.apps.chat import room as room_module
 
+_DROP = object()
+
 
 class FakePubSub:
     def __init__(self, redis):
@@ -15,7 +17,6 @@ class FakePubSub:
         self.channels: set[str] = set()
         self.queue: asyncio.Queue = asyncio.Queue()
         self.closed = False
-        self.drop = False
 
     async def subscribe(self, channel):
         self.channels.add(channel)
@@ -23,9 +24,9 @@ class FakePubSub:
 
     async def listen(self):
         while True:
-            if self.drop and self.queue.empty():
-                raise ConnectionError('pubsub connection lost')
             item = await self.queue.get()
+            if item is _DROP:
+                raise ConnectionError('pubsub connection lost')
             yield item
 
     async def aclose(self):
@@ -85,7 +86,7 @@ class FakeRedis:
 
     def drop_connections(self):
         for pubsub in self.pubsubs:
-            pubsub.drop = True
+            pubsub.queue.put_nowait(_DROP)
 
     async def publish(self, channel, data):
         if self.publish_fail:
@@ -151,11 +152,15 @@ class FakeWebSocket:
     def __init__(self, fail=False):
         self.sent: list[str] = []
         self.fail = fail
+        self.closed = False
 
     async def send_text(self, data):
         if self.fail:
             raise ConnectionError('socket closed')
         self.sent.append(data)
+
+    async def close(self, code=1000):
+        self.closed = True
 
 
 class BlockingWebSocket(FakeWebSocket):
@@ -194,10 +199,11 @@ def _returns(value):
 async def _reset_room():
     room_module._sockets.clear()
     room_module._listeners.clear()
+    room_module._subscribed.clear()
     yield
     for listener in list(room_module._listeners.values()):
-        if listener is not None:
-            listener.cancel()
+        listener.cancel()
     room_module._listeners.clear()
     room_module._sockets.clear()
+    room_module._subscribed.clear()
     await asyncio.sleep(0)

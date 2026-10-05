@@ -40,6 +40,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         logger.info('websocket disconnected session=%s', session_id)
     finally:
-        await leave(session_id, websocket)
+        try:
+            await leave(session_id, websocket)
+        except Exception as error:
+            logger.warning('leave failed session=%s error=%s', session_id, error)
         if not has_clients(session_id):
             request_retire(session_id)

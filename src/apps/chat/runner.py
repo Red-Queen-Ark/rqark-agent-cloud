@@ -98,8 +98,9 @@ class SessionRunner:
         else:
             logger.info('chat finished session=%s elapsed=%.1fs', self.session_id, monotonic() - started)
         finally:
+            if lock.lost:
+                logger.error('chat ran without lock session=%s', self.session_id)
             await lock.release()
-            await clear(self.session_id)
 
     async def _stop(self) -> None:
         await broadcast_stop(self.session_id)
