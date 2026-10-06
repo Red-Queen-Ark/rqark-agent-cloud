@@ -6,4 +6,6 @@ services:
     container_name: ${PROJECT_NAME}-server
     ports:
       - 8000:8000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
