@@ -8,42 +8,42 @@ logger = logging.getLogger(__name__)
 _TTL = 3600
 
 
-def _key(session_id: str) -> str:
-    return f'chat:replay:{session_id}'
+def _key(room: str) -> str:
+    return f'chat:replay:{room}'
 
 
-async def clear(session_id: str) -> None:
+async def clear(room: str) -> None:
     redis = await get_redis()
     if redis is None:
         return
     try:
-        await redis.delete(_key(session_id))
+        await redis.delete(_key(room))
     except Exception as error:
-        logger.debug('replay clear failed session=%s error=%s', session_id, error)
+        logger.debug('replay clear failed room=%s error=%s', room, error)
 
 
-async def record(session_id: str, payload: dict) -> None:
+async def record(room: str, payload: dict) -> None:
     redis = await get_redis()
     if redis is None:
         return
     try:
-        key = _key(session_id)
+        key = _key(room)
         pipeline = redis.pipeline()
         pipeline.rpush(key, json.dumps(payload))
         pipeline.expire(key, _TTL)
         await pipeline.execute()
     except Exception as error:
-        logger.debug('replay record failed session=%s error=%s', session_id, error)
+        logger.debug('replay record failed room=%s error=%s', room, error)
 
 
-async def read(session_id: str) -> list[dict]:
+async def read(room: str) -> list[dict]:
     redis = await get_redis()
     if redis is None:
         return []
     try:
-        items = await redis.lrange(_key(session_id), 0, -1)
+        items = await redis.lrange(_key(room), 0, -1)
     except Exception as error:
-        logger.debug('replay read failed session=%s error=%s', session_id, error)
+        logger.debug('replay read failed room=%s error=%s', room, error)
         return []
     events: list[dict] = []
     for item in items:

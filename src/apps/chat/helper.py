@@ -12,13 +12,49 @@ from rqark_core.types.event import AgentPayload
 from rqark_core.types.tool import PlanItem
 
 from src.apps.chat.event import connect_agent_event_to_room
-from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL
+from src.apps.chat.scope import room_key
+from src.apps.sandbox import swap_agent
+from src.apps.sandbox.workspace import Workspace
+from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE
 
 logger = logging.getLogger(__name__)
+
+SOURCE = 'AGENT_CLOUD'
 
 
 def _build_client(token: str | None) -> RQArkDataCloudClient:
     return RQArkDataCloudClient(CloudConfig(url=DATA_CLOUD_URL, api_key=token or ''), timeout=DATA_CLOUD_TIMEOUT)
+
+
+async def _owns_session(client: RQArkDataCloudClient, session_id: str) -> bool:
+    try:
+        await client.get_session(session_id)
+        return True
+    except DataCloudError as error:
+        if error.status_code != 404:
+            logger.warning('session lookup failed session=%s status=%s', session_id, error.status_code)
+        return False
+
+
+async def authorize_session(token: str | None, session_id: str, claim: bool = False) -> bool:
+    if token is None:
+        return False
+    client = _build_client(token)
+    try:
+        if await _owns_session(client, session_id):
+            return True
+        if not claim:
+            return False
+        try:
+            await client.create_session({'uuid': session_id}, source=SOURCE)
+            return True
+        except DataCloudError as error:
+            if error.status_code != 409:
+                logger.warning('session claim failed session=%s status=%s', session_id, error.status_code)
+                return False
+        return await _owns_session(client, session_id)
+    finally:
+        await client.aclose()
 
 
 async def authenticate(token: str | None) -> dict | None:
@@ -35,9 +71,12 @@ async def authenticate(token: str | None) -> dict | None:
 
 
 class ChatHelper:
-    def __init__(self, session_id: str, token: str | None):
+    def __init__(self, session_id: str, token: str | None, user_id: str):
         self.session_id = session_id
         self.token = token or ''
+        self.user_id = user_id
+        self.room = room_key(user_id, session_id)
+        self.workspace = Workspace(user_id, image=SANDBOX_IMAGE)
         self.client = _build_client(token)
         self.persisted = False
 
@@ -91,9 +130,10 @@ class ChatHelper:
             logger.error('provider not found session=%s provider=%s', self.session_id, provider_name)
             raise DataCloudError(404, 'PROVIDER_NOT_FOUND', f'provider not found: {provider_name}')
         agent = _build_agent(agent_info)
-        app = AgentApp(providers, CloudStorage(self.client, source='AGENT_CLOUD', list_source='AGENT_CLOUD'))
+        swap_agent(agent, self.workspace)
+        app = AgentApp(providers, CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
-        await connect_agent_event_to_room(app, self.session_id)
+        await connect_agent_event_to_room(app, self.room)
         streamed: list[str] = []
 
         @app.on_content()

@@ -26,3 +26,6 @@ REDIS_URL = os.getenv("REDIS_URL") or f"redis://{REDIS_SERVER}:{REDIS_PORT}/0"
 # Data cloud
 DATA_CLOUD_URL = os.getenv('DATA_CLOUD_URL', 'http://localhost:7302')
 DATA_CLOUD_TIMEOUT = float(os.getenv('DATA_CLOUD_TIMEOUT', '30'))
+
+# Sandbox
+SANDBOX_IMAGE = os.getenv('SANDBOX_IMAGE', 'rqark-sandbox:latest')

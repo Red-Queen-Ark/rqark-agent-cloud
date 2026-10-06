@@ -23,8 +23,8 @@ def _retry_delay() -> float:
 
 
 class ChatLock:
-    def __init__(self, session_id: str):
-        self._key = f'chat:busy:{session_id}'
+    def __init__(self, room: str):
+        self._key = f'chat:busy:{room}'
         self._owner = uuid4().hex
         self._redis: Redis | None = None
         self._heartbeat: asyncio.Task[None] | None = None

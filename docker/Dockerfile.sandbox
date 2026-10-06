@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        curl \
+        ca-certificates \
+        gnupg \
+        unzip \
+        zip \
+        xz-utils \
+        less \
+        jq \
+        ripgrep \
+        procps \
+        build-essential \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm config set --global update-notifier false && \
+    npm config set --global fund false && \
+    npm config set --global audit false
+
+RUN git config --system --add safe.directory /workspace
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

@@ -34,49 +34,49 @@ def error_event(message: str) -> dict:
     return agent_payload_to_send_json(AgentPayload('', (), Chunk('error', message)))
 
 
-async def _emit(session_id: str, agent_payload: AgentPayload) -> None:
+async def _emit(room: str, agent_payload: AgentPayload) -> None:
     data = agent_payload_to_send_json(agent_payload)
-    await record(session_id, data)
-    await publish(session_id, data)
+    await record(room, data)
+    await publish(room, data)
 
 
-async def connect_agent_event_to_room(app: AgentApp, session_id: str):
+async def connect_agent_event_to_room(app: AgentApp, room: str):
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
-        await _emit(session_id, ev)
+        await _emit(room, ev)
 
     @app.on_content()
     async def content(ev: AgentPayload[Chunk]) -> None:
-        await _emit(session_id, ev)
+        await _emit(room, ev)
 
     @app.on_tool_calls()
     async def tool_calls(ev: AgentPayload[Chunk]) -> None:
-        logger.info('tool calls session=%s agent=%s', session_id, ev.agent_id)
-        await _emit(session_id, ev)
+        logger.info('tool calls room=%s agent=%s', room, ev.agent_id)
+        await _emit(room, ev)
 
     @app.on_tool_result()
     async def tool_result(ev: AgentPayload[ToolMessage]) -> None:
         if str(ev.payload.content).startswith('Error'):
-            logger.warning('tool error session=%s tool=%s content=%s', session_id, ev.payload.tool_name, _clip(ev.payload.content))
-        await _emit(session_id, ev)
+            logger.warning('tool error room=%s tool=%s content=%s', room, ev.payload.tool_name, _clip(ev.payload.content))
+        await _emit(room, ev)
 
     @app.on_error()
     async def error(ev: AgentPayload[Chunk]) -> None:
-        logger.error('agent error session=%s agent=%s content=%s', session_id, ev.agent_id, _clip(ev.payload.content))
-        await _emit(session_id, ev)
+        logger.error('agent error room=%s agent=%s content=%s', room, ev.agent_id, _clip(ev.payload.content))
+        await _emit(room, ev)
 
     @app.on_provider_switched()
     async def provider_switched(ev: AgentPayload[ProviderSwitch]) -> None:
-        logger.warning('provider switched session=%s old=%s new=%s', session_id, ev.payload.old.name, ev.payload.new.name)
+        logger.warning('provider switched room=%s old=%s new=%s', room, ev.payload.old.name, ev.payload.new.name)
 
     @app.on_message()
     async def message(ev: AgentPayload[Message]) -> None:
         if isinstance(ev.payload, ToolMessage):
             return
-        await _emit(session_id, ev)
+        await _emit(room, ev)
 
     @app.on_plan()
     async def plan(ev: AgentPayload[list[PlanItem]]) -> None:
         if ev.path or ':' not in ev.agent_id:
             return
-        await _emit(session_id, ev)
+        await _emit(room, ev)

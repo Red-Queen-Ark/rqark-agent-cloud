@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from rqark_app.cloud.client import DataCloudError
@@ -7,6 +8,7 @@ from rqark_core.types.chat import Chunk, UserMessage
 from rqark_core.types.event import AgentPayload
 
 from src.apps.chat import helper as helper_module
+from src.apps.chat.scope import room_key
 
 
 class FakeClient:
@@ -124,7 +126,7 @@ def helper_env(monkeypatch):
     FakeApp.fail_save = False
     monkeypatch.setattr(helper_module, '_build_client', FakeClient)
     monkeypatch.setattr(helper_module, '_build_provider', FakeProvider)
-    monkeypatch.setattr(helper_module, '_build_agent', lambda info: object())
+    monkeypatch.setattr(helper_module, '_build_agent', lambda info: SimpleNamespace(prompts=[], tools=[]))
     monkeypatch.setattr(helper_module, 'AgentApp', FakeApp)
 
     async def noop(app, session_id):
@@ -137,7 +139,7 @@ def helper_env(monkeypatch):
 
 
 async def test_successful_chat_is_persisted(helper_env):
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
     await helper.chat('hi', 'p', 'a')
     assert helper.persisted is True
     assert FakeApp.last.session_mgr.saved == ['s1']
@@ -151,7 +153,7 @@ async def test_cancelled_chat_saves_partial_content_and_is_persisted(helper_env)
         raise asyncio.CancelledError()
 
     FakeApp.behavior = behavior
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
 
     with pytest.raises(asyncio.CancelledError):
         await helper.chat('hi', 'p', 'a')
@@ -170,7 +172,7 @@ async def test_failed_partial_save_is_not_persisted(helper_env):
 
     FakeApp.behavior = behavior
     FakeApp.fail_save = True
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
 
     with pytest.raises(DataCloudError):
         await helper.chat('hi', 'p', 'a')
@@ -184,7 +186,7 @@ async def test_already_saved_history_is_persisted_without_saving(helper_env):
         raise asyncio.CancelledError()
 
     FakeApp.behavior = behavior
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
 
     with pytest.raises(asyncio.CancelledError):
         await helper.chat('hi', 'p', 'a')
@@ -198,7 +200,7 @@ async def test_title_failure_after_saved_chat_still_counts_as_persisted(helper_e
         app.chat_helper.fail_title = True
 
     FakeApp.behavior = behavior
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
 
     with pytest.raises(RuntimeError):
         await helper.chat('hi', 'p', 'a')
@@ -207,7 +209,7 @@ async def test_title_failure_after_saved_chat_still_counts_as_persisted(helper_e
 
 
 async def test_persisted_flag_is_reset_each_turn(helper_env):
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
     await helper.chat('hi', 'p', 'a')
     assert helper.persisted is True
 
@@ -233,7 +235,7 @@ async def test_session_is_loaded_with_two_requests(helper_env, monkeypatch):
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
     await helper.chat('hi', 'p', 'a')
 
     client = seen[0]
@@ -255,7 +257,7 @@ async def test_missing_session_is_created_empty(helper_env, monkeypatch):
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
     await helper.chat('hi', 'p', 'a')
 
     client = seen[0]
@@ -271,7 +273,7 @@ async def test_session_load_error_is_raised(helper_env, monkeypatch):
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
     with pytest.raises(DataCloudError):
         await helper.chat('hi', 'p', 'a')
     assert helper.persisted is False
@@ -286,7 +288,7 @@ async def test_update_token_rebuilds_the_client(helper_env, monkeypatch):
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
-    helper = helper_module.ChatHelper('s1', 'old-token')
+    helper = helper_module.ChatHelper('s1', 'old-token', 'u1')
     first = helper.client
 
     await helper.update_token('new-token')
@@ -306,7 +308,7 @@ async def test_update_token_ignores_the_same_token(helper_env, monkeypatch):
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
-    helper = helper_module.ChatHelper('s1', 'same')
+    helper = helper_module.ChatHelper('s1', 'same', 'u1')
     await helper.update_token('same')
     await helper.update_token('same')
     assert len(built) == 1
@@ -322,7 +324,7 @@ async def test_chat_uses_the_updated_token(helper_env, monkeypatch):
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
-    helper = helper_module.ChatHelper('s1', 'stale')
+    helper = helper_module.ChatHelper('s1', 'stale', 'u1')
     await helper.update_token('fresh')
     await helper.chat('hi', 'p', 'a')
 
@@ -331,7 +333,30 @@ async def test_chat_uses_the_updated_token(helper_env, monkeypatch):
 
 
 async def test_agent_not_found_is_not_persisted(helper_env):
-    helper = helper_module.ChatHelper('s1', 't')
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
     with pytest.raises(DataCloudError):
         await helper.chat('hi', 'p', 'missing')
     assert helper.persisted is False
+
+
+async def test_room_and_workspace_are_scoped_to_the_user(helper_env, monkeypatch):
+    seen: list[str] = []
+
+    async def capture(app, room):
+        seen.append(room)
+
+    monkeypatch.setattr(helper_module, 'connect_agent_event_to_room', capture)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    await helper.chat('hi', 'p', 'a')
+
+    assert seen == [room_key('u1', 's1')]
+    assert helper.room == room_key('u1', 's1')
+    assert helper.workspace.user_id == 'u1'
+    assert helper.workspace.container_name == 'rqark-user-u1-workspace'
+
+
+async def test_another_user_gets_a_different_room(helper_env):
+    a = helper_module.ChatHelper('s1', 't', 'u1')
+    b = helper_module.ChatHelper('s1', 't', 'u2')
+    assert a.room != b.room
+    assert a.workspace.container_name != b.workspace.container_name

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import posixpath
 import shlex
@@ -71,16 +72,7 @@ class Workspace:
     WORKDIR: str = '/workspace'
     RESERVED_NETWORKS: frozenset[str] = frozenset({'none', 'host', 'bridge'})
 
-    def __init__(
-        self,
-        user_id: str,
-        image: str = 'ubuntu:24.04',
-        network: str | None = None,
-        memory: str = '1g',
-        nano_cpus: int = 1_000_000_000,
-        pids_limit: int = 256,
-        cap_add: Sequence[str] = (),
-    ):
+    def __init__(self, user_id: str, image: str = 'ubuntu:24.04', network: str | None = None, memory: str = '1g', nano_cpus: int = 1_000_000_000, pids_limit: int = 256, cap_add: Sequence[str] = ()):
         self.user_id = user_id
         self.image = image
         self.network = network
@@ -91,11 +83,20 @@ class Workspace:
 
     @property
     def name(self) -> str:
-        return f'rqark-user-{self.user_id}'
+        return f'rqark-user-{self.slug}'
 
     @property
     def container_name(self) -> str:
         return f'{self.name}-workspace'
+
+    @property
+    def slug(self) -> str:
+        cleaned = ''.join(char if char.isalnum() or char in '-_.' else '-' for char in self.user_id).strip('-_')
+        if not cleaned:
+            return hashlib.sha256(self.user_id.encode('utf-8')).hexdigest()[:12]
+        if cleaned == self.user_id:
+            return cleaned
+        return f'{cleaned[:40]}-{hashlib.sha256(self.user_id.encode("utf-8")).hexdigest()[:8]}'
 
     @property
     def network_name(self) -> str:

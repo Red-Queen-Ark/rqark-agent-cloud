@@ -20,6 +20,12 @@ def _bearer(authorization: str) -> str:
     return token
 
 
+async def get_bearer(authorization: str | None = Header(default=None)) -> str:
+    if authorization is None:
+        raise AuthError(401, 'UNAUTHORIZED', 'Authentication credentials were not provided.')
+    return _bearer(authorization)
+
+
 async def get_current_user(authorization: str | None = Header(default=None)) -> dict:
     if authorization is None:
         raise AuthError(401, 'UNAUTHORIZED', 'Authentication credentials were not provided.')
