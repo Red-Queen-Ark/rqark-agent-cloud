@@ -53,9 +53,9 @@
 
 ### Sandbox image
 
-`SANDBOX_IMAGE` 預設 `rqark-sandbox:latest`（`docker/Dockerfile.sandbox` 已寫，未 build）。
-`ubuntu:24.04` 冇 git / node / uv，clone 會回 `Clone failed: git command not found in the
-sandbox image`（exit 127 已 map）。
+`SANDBOX_IMAGE` 預設 `ubuntu:24.04`（`docker/Dockerfile.sandbox` 已寫，未 build；build 完將
+`SANDBOX_IMAGE` 指過去就得）。`ubuntu:24.04` 冇 git / node / uv，clone 會回
+`Clone failed: git command not found in the sandbox image`（exit 127 已 map）。
 
 如果用 apt 就要 `cap_add=['DAC_OVERRIDE','SETUID','SETGID']`（實測：單加
 `DAC_OVERRIDE` 或 `SETUID+SETGID` 都唔夠）。正路係裝喺 image 度，唔好 runtime 裝。
