@@ -49,6 +49,22 @@
 
 `user_id` 由 data-cloud `users/me` 派（UUID，client 揀唔到），所以 `:` 分隔唔會造成歧義。
 
+## Deploy
+
+Production 用 `docker-compose.production.yml`（tag `v*` 觸發 `.gitea/workflows/deploy.yaml`），
+應用唔使帶 sandbox image 入 build context，只要 host daemon 拉到就得。
+
+Prerequisites：
+
+1. host 有 `/var/run/docker.sock`（已經掛入 `agent-cloud`）。
+2. host 拉到 `SANDBOX_IMAGE`（預設 `ubuntu:24.04`）。拉唔到就 `_create()` 會掟
+   `ImageNotFound`，tools 全滅。想穩陣就 deploy 前 `docker pull ubuntu:24.04`。
+3. `SANDBOX_IMAGE` 兩個 compose file 都有 expose，可以 `SANDBOX_IMAGE=... docker compose up`。
+
+現階段 `ubuntu:24.04` = 冇 git / node / uv，所以 `exec` / 讀寫檔 / grep / list_dir 正常，
+clone / `npm i` / `uv sync` 唔得。要全套功能就 build `docker/Dockerfile.sandbox`
+再指 `SANDBOX_IMAGE=rqark-sandbox:latest`，唔使改 code。
+
 ## 未完成
 
 ### Sandbox image

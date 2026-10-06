@@ -9,6 +9,7 @@ services:
     environment:
       - DATA_CLOUD_URL=http://server:7302
       - REDIS_SERVER=redis
+      - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ubuntu:24.04}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     container_name: ${PROJECT_NAME}-server

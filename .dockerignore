@@ -1,0 +1,17 @@
+.git
+.gitignore
+.gitea
+.venv
+.Python
+.vscode
+.env
+.env.*
+.mypy_cache
+.ruff_cache
+.pytest_cache
+__pycache__
+*.py[cod]
+_docs
+tests
+docker-compose.yml
+docker-compose.production.yml
