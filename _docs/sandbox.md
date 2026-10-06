@@ -65,7 +65,34 @@ Prerequisites：
 clone / `npm i` / `uv sync` 唔得。要全套功能就 build `docker/Dockerfile.sandbox`
 再指 `SANDBOX_IMAGE=rqark-sandbox:latest`，唔使改 code。
 
+## 沙盒幾時建立
+
+`Workspace(...)` 只係一個物件，唔掂 docker。真正 `docker run` 發生喺**第一次**
+`_ensure()`，而 `_ensure()` 由 prompt 同 tool 觸發：
+
+| 觸發點 | 幾時 |
+|---|---|
+| `ChatHelper.chat()` 開頭 `await self.workspace.ensure()` | build agent 之前，喺 worker thread 起容器（cold start / image pull 都喺呢度） |
+| `AgentsMdPrompt` / `GitProjectPrompt` 砌 system prompt | 落沙盒讀檔、跑 git；冇 pre-warm 就會喺呢度同步起容器 |
+| 第一個 sandbox tool call | `exec` / `read_file` 之類 |
+
+`swap_agent()` 本身唔會起容器，佢只係換 object。
+
+所以 `ChatHelper.chat()` 開頭嗰個 `await self.workspace.ensure()` 就係 pre-warm：
+cold start 由「同步塞住 event loop 幾百 ms 至幾十秒」變成 worker thread 內進行，
+loop stall 由 ~220ms 降到 ~12ms（等於 baseline）。
+
+仍然存在：容器熱咗之後，`get_messages()` 仲係同步，5 次 `run_shell` 會 stall ~72ms。
+要再修就要 cache prompt 數據（branch / status / log 喺 async 路徑預先攞好再注入），
+或者上游令 `BasePrompt.get_messages()` 可以係 async。
+
 ## 未完成
+
+### 冇嘢會停容器
+
+`ChatHelper` / `SessionRunner` 冇 call `workspace.stop()`，retire 只係閂 HTTP client。
+即係容器一旦起咗就長生，直到 host reboot 或者手動 `docker rm`。
+Plan：reaper 掃 `rqark.sandbox=1` label 停 idle 容器（volume 要保留）。
 
 ### Sandbox image
 
@@ -97,4 +124,3 @@ core 嘅 `_clone_url()` 產生 `https://x-access-token:<token>@host/repo.git`，
 - **`_locks` dict**：`src/apps/sandbox/workspace.py`，每個 user 加一條就唔清，長期會 leak。
 - **`--workers 4`**：`_runners` / `_locks` 係 per-process，同一 session 有機會被兩個
   worker 各起一個 runner。docker 係唯一真相所以唔會壞，但值得知。
-- **舊 volume**：`rqark-user-ansoncar-test`（舊命名，唔會再被 reuse）。

@@ -234,6 +234,9 @@ class Workspace:
         if not container.put_archive(parent, buffer.getvalue()):
             raise WorkspaceError(f'cannot write file: {path}')
 
+    async def ensure(self) -> None:
+        await asyncio.to_thread(self._ensure)
+
     async def stop(self) -> None:
         await asyncio.to_thread(self._stop)
 

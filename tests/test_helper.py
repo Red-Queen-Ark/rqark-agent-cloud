@@ -129,6 +129,11 @@ def helper_env(monkeypatch):
     monkeypatch.setattr(helper_module, '_build_agent', lambda info: SimpleNamespace(prompts=[], tools=[]))
     monkeypatch.setattr(helper_module, 'AgentApp', FakeApp)
 
+    async def noop_ensure(self):
+        return None
+
+    monkeypatch.setattr(helper_module.Workspace, 'ensure', noop_ensure)
+
     async def noop(app, session_id):
         return None
 
@@ -360,3 +365,53 @@ async def test_another_user_gets_a_different_room(helper_env):
     b = helper_module.ChatHelper('s1', 't', 'u2')
     assert a.room != b.room
     assert a.workspace.container_name != b.workspace.container_name
+
+
+async def test_workspace_is_warmed_before_the_agent_runs(helper_env, monkeypatch):
+    order: list[str] = []
+
+    async def record_ensure(self):
+        order.append('ensure')
+
+    real_init = FakeApp.__init__
+
+    def init(self, providers, storage):
+        order.append('app')
+        real_init(self, providers, storage)
+
+    monkeypatch.setattr(helper_module.Workspace, 'ensure', record_ensure)
+    monkeypatch.setattr(FakeApp, '__init__', init)
+
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    await helper.chat('hi', 'p', 'a')
+
+    assert order == ['ensure', 'app']
+
+
+async def test_unknown_agent_does_not_warm_a_workspace(helper_env, monkeypatch):
+    warmed: list[str] = []
+
+    async def record_ensure(self):
+        warmed.append('ensure')
+
+    monkeypatch.setattr(helper_module.Workspace, 'ensure', record_ensure)
+
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    with pytest.raises(DataCloudError):
+        await helper.chat('hi', 'p', 'missing')
+
+    assert warmed == []
+
+
+async def test_warmup_failure_aborts_the_turn(helper_env, monkeypatch):
+    async def failing_ensure(self):
+        raise RuntimeError('docker unreachable')
+
+    monkeypatch.setattr(helper_module.Workspace, 'ensure', failing_ensure)
+
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    with pytest.raises(RuntimeError):
+        await helper.chat('hi', 'p', 'a')
+
+    assert helper.persisted is False
+    assert FakeApp.last is None

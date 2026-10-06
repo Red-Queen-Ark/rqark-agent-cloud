@@ -129,6 +129,7 @@ class ChatHelper:
         if provider is None:
             logger.error('provider not found session=%s provider=%s', self.session_id, provider_name)
             raise DataCloudError(404, 'PROVIDER_NOT_FOUND', f'provider not found: {provider_name}')
+        await self.workspace.ensure()
         agent = _build_agent(agent_info)
         swap_agent(agent, self.workspace)
         app = AgentApp(providers, CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
