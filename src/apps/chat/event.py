@@ -17,6 +17,10 @@ def _clip(value: object, limit: int = 500) -> str:
     return text if len(text) <= limit else f'{text[:limit]}...'
 
 
+def _is_subagent(ev: AgentPayload) -> bool:
+    return bool(ev.path)
+
+
 def agent_payload_to_send_json(agent_payload: AgentPayload):
     payload = agent_payload.payload
     data = str(payload)
@@ -43,25 +47,35 @@ async def _emit(room: str, agent_payload: AgentPayload) -> None:
 async def connect_agent_event_to_room(app: AgentApp, room: str):
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
+        if _is_subagent(ev):
+            return
         await _emit(room, ev)
 
     @app.on_content()
     async def content(ev: AgentPayload[Chunk]) -> None:
+        if _is_subagent(ev):
+            return
         await _emit(room, ev)
 
     @app.on_tool_calls()
     async def tool_calls(ev: AgentPayload[Chunk]) -> None:
+        if _is_subagent(ev):
+            return
         logger.info('tool calls room=%s agent=%s', room, ev.agent_id)
         await _emit(room, ev)
 
     @app.on_tool_result()
     async def tool_result(ev: AgentPayload[ToolMessage]) -> None:
+        if _is_subagent(ev):
+            return
         if str(ev.payload.content).startswith('Error'):
             logger.warning('tool error room=%s tool=%s content=%s', room, ev.payload.tool_name, _clip(ev.payload.content))
         await _emit(room, ev)
 
     @app.on_error()
     async def error(ev: AgentPayload[Chunk]) -> None:
+        if _is_subagent(ev):
+            return
         logger.error('agent error room=%s agent=%s content=%s', room, ev.agent_id, _clip(ev.payload.content))
         await _emit(room, ev)
 
@@ -71,12 +85,12 @@ async def connect_agent_event_to_room(app: AgentApp, room: str):
 
     @app.on_message()
     async def message(ev: AgentPayload[Message]) -> None:
-        if isinstance(ev.payload, ToolMessage):
+        if _is_subagent(ev) or isinstance(ev.payload, ToolMessage):
             return
         await _emit(room, ev)
 
     @app.on_plan()
     async def plan(ev: AgentPayload[list[PlanItem]]) -> None:
-        if ev.path or ':' not in ev.agent_id:
+        if _is_subagent(ev) or ':' not in ev.agent_id:
             return
         await _emit(room, ev)
