@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass, field
 
 from rqark_app.app import AgentApp, Message
 from rqark_app.types.event import ProviderSwitch
@@ -19,6 +20,15 @@ def _clip(value: object, limit: int = 500) -> str:
 
 def _is_subagent(ev: AgentPayload) -> bool:
     return bool(ev.path)
+
+
+@dataclass
+class RoomStream:
+    content: list[str] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return ''.join(self.content)
 
 
 def agent_payload_to_send_json(agent_payload: AgentPayload):
@@ -44,7 +54,9 @@ async def _emit(room: str, agent_payload: AgentPayload) -> None:
     await publish(room, data)
 
 
-async def connect_agent_event_to_room(app: AgentApp, room: str):
+async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
+    stream = RoomStream()
+
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
         if _is_subagent(ev):
@@ -55,6 +67,7 @@ async def connect_agent_event_to_room(app: AgentApp, room: str):
     async def content(ev: AgentPayload[Chunk]) -> None:
         if _is_subagent(ev):
             return
+        stream.content.append(str(ev.payload.content))
         await _emit(room, ev)
 
     @app.on_tool_calls()
@@ -94,3 +107,5 @@ async def connect_agent_event_to_room(app: AgentApp, room: str):
         if _is_subagent(ev) or ':' not in ev.agent_id:
             return
         await _emit(room, ev)
+
+    return stream

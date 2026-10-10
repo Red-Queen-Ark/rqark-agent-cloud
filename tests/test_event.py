@@ -145,3 +145,16 @@ async def test_agentless_plans_are_dropped(room_env):
     await app.handlers['plan'](AgentPayload('root', (), [PlanItem('p1', 'step', 'pending')]))
 
     assert await replay.read(ROOM) == []
+
+
+async def test_room_stream_keeps_only_main_agent_content(room_env):
+    app = FakeApp()
+    stream = await event_module.connect_agent_event_to_room(app, ROOM)
+
+    await app.handlers['content'](AgentPayload(MAIN, (), Chunk('content', 'hi')))
+    await app.handlers['content'](AgentPayload(SUBAGENT, PATH, Chunk('content', 'noise')))
+    await app.handlers['content'](AgentPayload(SUBAGENT, NESTED, Chunk('content', 'deeper')))
+    await app.handlers['content'](AgentPayload(MAIN, (), Chunk('content', ' there')))
+
+    assert stream.text == 'hi there'
+    assert [event['payload']['content'] for event in await replay.read(ROOM)] == ['hi', ' there']

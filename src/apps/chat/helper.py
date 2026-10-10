@@ -8,8 +8,7 @@ from rqark_app.session.manager import SessionManager
 from rqark_app.session.storage import CloudStorage
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
-from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
-from rqark_core.types.event import AgentPayload
+from rqark_core.types.chat import AssistantMessage, UserMessage
 from rqark_core.types.tool import PlanItem
 
 from src.apps.chat.event import connect_agent_event_to_room
@@ -134,12 +133,7 @@ class ChatHelper:
         swap_agent(agent, self.workspace)
         app = AgentApp(providers, CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
-        await connect_agent_event_to_room(app, self.room)
-        streamed: list[str] = []
-
-        @app.on_content()
-        async def collect(ev: AgentPayload[Chunk]) -> None:
-            streamed.append(str(ev.payload.content))
+        stream = await connect_agent_event_to_room(app, self.room)
 
         if not await self._load_session(app.session_mgr):
             logger.error('chat refused for a missing session session=%s', self.session_id)
@@ -151,7 +145,7 @@ class ChatHelper:
         try:
             await app.chat(content, agent, session_id=self.session_id)
         except asyncio.CancelledError:
-            await self._save_partial(app, session, saved, content, ''.join(streamed))
+            await self._save_partial(app, session, saved, content, stream.text)
             raise
         self.persisted = True
         if needs_title:

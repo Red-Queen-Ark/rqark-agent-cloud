@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 from rqark_app.cloud.client import DataCloudError
 from rqark_app.types.session import Session
-from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
-from rqark_core.types.event import AgentPayload
+from rqark_core.types.chat import AssistantMessage, UserMessage
 
+from src.apps.chat import event as event_module
 from src.apps.chat import helper as helper_module
 from src.apps.chat.scope import room_key
 
@@ -111,21 +111,11 @@ class FakeApp:
         self.provider_mgr = FakeProviderManager(providers)
         self.session_mgr = FakeSessionManager(FakeApp.fail_save)
         self.chat_helper = FakeInnerHelper()
-        self._content = None
-
-    def on_content(self):
-        def register(fn):
-            self._content = fn
-            return fn
-
-        return register
+        self.stream = event_module.RoomStream()
 
     async def chat(self, content, agent, session_id=None):
         if FakeApp.behavior is not None:
             await FakeApp.behavior(self)
-        if self._content is not None:
-            for piece in ('hel', 'lo'):
-                await self._content(AgentPayload('a:s1', (), Chunk('content', piece)))
         await self.session_mgr.save(session_id or 's1')
 
 
@@ -144,10 +134,10 @@ def helper_env(monkeypatch):
 
     monkeypatch.setattr(helper_module.Workspace, 'ensure', noop_ensure)
 
-    async def noop(app, session_id):
-        return None
+    async def fake_connect(app, room):
+        return app.stream
 
-    monkeypatch.setattr(helper_module, 'connect_agent_event_to_room', noop)
+    monkeypatch.setattr(helper_module, 'connect_agent_event_to_room', fake_connect)
     yield
     FakeApp.behavior = None
     FakeApp.fail_save = False
@@ -163,8 +153,7 @@ async def test_successful_chat_is_persisted(helper_env):
 
 async def test_cancelled_chat_saves_partial_content_and_is_persisted(helper_env):
     async def behavior(app):
-        for piece in ('par', 'tial'):
-            await app._content(AgentPayload('a:s1', (), Chunk('content', piece)))
+        app.stream.content.extend(['par', 'tial'])
         raise asyncio.CancelledError()
 
     FakeApp.behavior = behavior
@@ -225,8 +214,7 @@ async def test_cancelled_chat_keeps_the_previous_history(helper_env, monkeypatch
         return client
 
     async def behavior(app):
-        for piece in ('par', 'tial'):
-            await app._content(AgentPayload('a:s1', (), Chunk('content', piece)))
+        app.stream.content.extend(['par', 'tial'])
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(helper_module, '_build_client', build)
@@ -410,6 +398,7 @@ async def test_room_and_workspace_are_scoped_to_the_user(helper_env, monkeypatch
 
     async def capture(app, room):
         seen.append(room)
+        return app.stream
 
     monkeypatch.setattr(helper_module, 'connect_agent_event_to_room', capture)
     helper = helper_module.ChatHelper('s1', 't', 'u1')
