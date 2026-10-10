@@ -484,6 +484,15 @@ async def test_revert_is_refused_with_a_single_user_turn(helper_env, monkeypatch
     assert seen[0].calls == ['get_session', 'list_session_messages']
 
 
+async def test_revert_refuses_the_opening_user_message(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+    monkeypatch.setattr(helper_module, '_build_client', _revert_client(seen))
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    assert await helper.revert('m1') is None
+    assert seen[0].calls == ['get_session', 'list_session_messages']
+
+
 async def test_revert_session_closes_the_client(helper_env, monkeypatch):
     seen: list[FakeClient] = []
     monkeypatch.setattr(helper_module, '_build_client', _revert_client(seen))

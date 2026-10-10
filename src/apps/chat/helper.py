@@ -160,6 +160,13 @@ class ChatHelper:
     async def revert(self, message_id: str) -> Session | None:
         manager = SessionManager(CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
         await self._load_session(manager)
+        session = manager.sessions_map.get(self.session_id)
+        if session is None:
+            return None
+        first = next((message for message in session.history if isinstance(message, UserMessage)), None)
+        if first is None or first.id == message_id:
+            logger.warning('refusing to revert the opening user message session=%s', self.session_id)
+            return None
         reverted = await manager.revert(self.session_id, message_id)
         if reverted is not None:
             logger.info('session reverted session=%s message=%s remaining=%d', self.session_id, message_id, len(reverted.history))
