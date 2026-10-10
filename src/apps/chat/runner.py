@@ -63,6 +63,9 @@ class SessionRunner:
     def _busy(self) -> bool:
         return self._chat is not None and not self._chat.done()
 
+    def busy(self) -> bool:
+        return self._busy()
+
     def _start_chat(self, command: ChatCommand, lock: ChatLock) -> None:
         self._chat = asyncio.create_task(self._chat_once(command, lock))
         self._chat.add_done_callback(lambda _: self.request_retire())
@@ -159,3 +162,8 @@ def request_retire(session_id: str, user_id: str) -> None:
     runner = _runners.get(room_key(user_id, session_id))
     if runner is not None:
         runner.request_retire()
+
+
+def is_busy(session_id: str, user_id: str) -> bool:
+    runner = _runners.get(room_key(user_id, session_id))
+    return runner is not None and runner.busy()

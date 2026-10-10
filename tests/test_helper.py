@@ -19,6 +19,7 @@ class FakeClient:
         self.session_info: dict | None = {'id': 's1', 'title': '', 'plan_items': [], 'created_at': '2026-01-01T00:00:00+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'}
         self.messages: list[dict] = []
         self.get_session_error: DataCloudError | None = None
+        self.updated: dict | None = None
 
     async def list_agents(self):
         self.calls.append('list_agents')
@@ -41,6 +42,15 @@ class FakeClient:
     async def list_sessions(self, source=None):
         self.calls.append('list_sessions')
         return []
+
+    async def update_session(self, uuid, payload, source=None):
+        self.calls.append('update_session')
+        self.updated = payload
+        return {}
+
+    async def create_session(self, payload, source=None):
+        self.calls.append('create_session')
+        return {}
 
     async def aclose(self):
         self.closed = True
@@ -415,3 +425,68 @@ async def test_warmup_failure_aborts_the_turn(helper_env, monkeypatch):
 
     assert helper.persisted is False
     assert FakeApp.last is None
+
+
+def _user(seq, message_id, text):
+    return {'seq': seq, 'data': {'role': 'user', 'content': [{'type': 'text', 'text': text}], 'created_at': '2026-01-01T00:00:00+00:00', 'id': message_id}}
+
+
+def _assistant(seq, message_id, text):
+    return {'seq': seq, 'data': {'role': 'assistant', 'content': text, 'created_at': '2026-01-01T00:00:00+00:00', 'id': message_id}}
+
+
+def _revert_client(seen):
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [_user(0, 'm1', 'first'), _assistant(1, 'a1', 'answer'), _user(2, 'm2', 'second')]
+        seen.append(client)
+        return client
+
+    return build
+
+
+async def test_revert_trims_and_persists_the_session(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+    monkeypatch.setattr(helper_module, '_build_client', _revert_client(seen))
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    session = await helper.revert('m2')
+
+    assert session is not None
+    assert [message.content for message in session.history] == ['first', 'answer']
+    client = seen[0]
+    assert client.calls == ['get_session', 'list_session_messages', 'update_session']
+    assert [message['content'] for message in client.updated['history']] == [[{'type': 'text', 'text': 'first'}], 'answer']
+
+
+async def test_revert_rejects_an_unknown_message(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+    monkeypatch.setattr(helper_module, '_build_client', _revert_client(seen))
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    assert await helper.revert('missing') is None
+    assert seen[0].calls == ['get_session', 'list_session_messages']
+
+
+async def test_revert_is_refused_with_a_single_user_turn(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [_user(0, 'm1', 'only')]
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    assert await helper.revert('m1') is None
+    assert seen[0].calls == ['get_session', 'list_session_messages']
+
+
+async def test_revert_session_closes_the_client(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+    monkeypatch.setattr(helper_module, '_build_client', _revert_client(seen))
+
+    assert await helper_module.revert_session('s1', 'm2', 't', 'u1') is True
+    assert seen[0].closed is True

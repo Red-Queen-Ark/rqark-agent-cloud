@@ -4,6 +4,7 @@ import logging
 from rqark_app.app import AgentApp, Session
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
 from rqark_app.config.manager import _build_agent, _build_provider
+from rqark_app.session.manager import SessionManager
 from rqark_app.session.storage import CloudStorage
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
@@ -100,7 +101,7 @@ class ChatHelper:
         await app.session_mgr.save(session.uuid)
         self.persisted = True
 
-    async def _load_session(self, app: AgentApp) -> None:
+    async def _load_session(self, manager: SessionManager) -> None:
         try:
             info = await self.client.get_session(self.session_id)
         except DataCloudError as error:
@@ -108,7 +109,7 @@ class ChatHelper:
                 raise
             return
         messages = await self.client.list_session_messages(self.session_id)
-        app.session_mgr.sessions_map[self.session_id] = Session(
+        manager.sessions_map[self.session_id] = Session(
             uuid=info['id'],
             created_at=parse_dt(info['created_at']),
             updated_at=parse_dt(info['updated_at']),
@@ -141,7 +142,7 @@ class ChatHelper:
         async def collect(ev: AgentPayload[Chunk]) -> None:
             streamed.append(str(ev.payload.content))
 
-        await self._load_session(app)
+        await self._load_session(app.session_mgr)
         session = await app.session_mgr.get_or_create(self.session_id)
         needs_title = bool(content) and not session.title
         saved = len(session.history)
@@ -156,5 +157,21 @@ class ChatHelper:
             await app.chat_helper.gen_title(session.uuid, content)
         return session
 
+    async def revert(self, message_id: str) -> Session | None:
+        manager = SessionManager(CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
+        await self._load_session(manager)
+        reverted = await manager.revert(self.session_id, message_id)
+        if reverted is not None:
+            logger.info('session reverted session=%s message=%s remaining=%d', self.session_id, message_id, len(reverted.history))
+        return reverted
+
     async def close(self) -> None:
         await self.client.aclose()
+
+
+async def revert_session(session_id: str, message_id: str, token: str, user_id: str) -> bool:
+    helper = ChatHelper(session_id, token, user_id)
+    try:
+        return await helper.revert(message_id) is not None
+    finally:
+        await helper.close()
