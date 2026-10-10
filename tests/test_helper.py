@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from rqark_app.cloud.client import DataCloudError
 from rqark_app.types.session import Session
-from rqark_core.types.chat import Chunk, UserMessage
+from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
 from rqark_core.types.event import AgentPayload
 
 from src.apps.chat import helper as helper_module
@@ -195,7 +195,7 @@ async def test_failed_partial_save_is_not_persisted(helper_env):
     assert helper.persisted is False
 
 
-async def test_already_saved_history_is_persisted_without_saving(helper_env):
+async def test_already_saved_history_is_rewritten_without_duplicating(helper_env):
     async def behavior(app):
         app.session_mgr.sessions_map['s1'].history.append(UserMessage('already in cloud'))
         raise asyncio.CancelledError()
@@ -206,8 +206,58 @@ async def test_already_saved_history_is_persisted_without_saving(helper_env):
     with pytest.raises(asyncio.CancelledError):
         await helper.chat('hi', 'p', 'a')
 
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [message.content for message in session.history] == ['already in cloud']
+    assert FakeApp.last.session_mgr.saved == ['s1']
     assert helper.persisted is True
-    assert FakeApp.last.session_mgr.saved == []
+
+
+async def test_cancelled_chat_keeps_the_previous_history(helper_env, monkeypatch):
+    seen: list[FakeClient] = []
+
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [
+            {'seq': 0, 'data': {'role': 'user', 'content': [{'type': 'text', 'text': 'old question'}], 'created_at': '2026-01-01T00:00:00+00:00'}},
+            {'seq': 1, 'data': {'role': 'assistant', 'content': 'old answer', 'created_at': '2026-01-01T00:00:00+00:00'}},
+        ]
+        seen.append(client)
+        return client
+
+    async def behavior(app):
+        for piece in ('par', 'tial'):
+            await app._content(AgentPayload('a:s1', (), Chunk('content', piece)))
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    FakeApp.behavior = behavior
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(asyncio.CancelledError):
+        await helper.chat('new question', 'p', 'a')
+
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [message.content for message in session.history] == ['old question', 'old answer', 'new question', 'partial']
+    assert FakeApp.last.session_mgr.saved == ['s1']
+    assert helper.persisted is True
+
+
+async def test_cancelled_chat_rewrites_a_turn_the_app_already_grew(helper_env):
+    async def behavior(app):
+        session = app.session_mgr.sessions_map['s1']
+        session.history.extend([UserMessage('hi'), AssistantMessage('whole')])
+        raise asyncio.CancelledError()
+
+    FakeApp.behavior = behavior
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(asyncio.CancelledError):
+        await helper.chat('hi', 'p', 'a')
+
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [message.content for message in session.history] == ['hi', 'whole']
+    assert FakeApp.last.session_mgr.saved == ['s1']
+    assert helper.persisted is True
 
 
 async def test_title_failure_after_saved_chat_still_counts_as_persisted(helper_env):
@@ -262,7 +312,7 @@ async def test_session_is_loaded_with_two_requests(helper_env, monkeypatch):
     assert FakeApp.last.session_mgr.saved == ['s1']
 
 
-async def test_missing_session_is_created_empty(helper_env, monkeypatch):
+async def test_missing_session_is_refused_without_saving(helper_env, monkeypatch):
     seen: list[FakeClient] = []
 
     def build(token):
@@ -273,12 +323,13 @@ async def test_missing_session_is_created_empty(helper_env, monkeypatch):
 
     monkeypatch.setattr(helper_module, '_build_client', build)
     helper = helper_module.ChatHelper('s1', 't', 'u1')
-    await helper.chat('hi', 'p', 'a')
+    with pytest.raises(DataCloudError):
+        await helper.chat('hi', 'p', 'a')
 
     client = seen[0]
     assert client.calls == ['list_agents', 'list_providers', 'get_session']
-    session = FakeApp.last.session_mgr.sessions_map['s1']
-    assert session.history == []
+    assert FakeApp.last.session_mgr.saved == []
+    assert helper.persisted is False
 
 
 async def test_session_load_error_is_raised(helper_env, monkeypatch):
@@ -466,6 +517,18 @@ async def test_revert_rejects_an_unknown_message(helper_env, monkeypatch):
 
     assert await helper.revert('missing') is None
     assert seen[0].calls == ['get_session', 'list_session_messages']
+
+
+async def test_revert_refuses_a_missing_session(helper_env, monkeypatch):
+    def build(token):
+        client = FakeClient(token)
+        client.get_session_error = DataCloudError(404, 'NOT_FOUND', 'missing')
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    assert await helper.revert('m2') is None
 
 
 async def test_revert_is_refused_with_a_single_user_turn(helper_env, monkeypatch):

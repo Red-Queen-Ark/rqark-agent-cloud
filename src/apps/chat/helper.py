@@ -90,24 +90,22 @@ class ChatHelper:
         await previous.aclose()
 
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
-        if len(session.history) > saved:
-            logger.warning('session already saved session=%s streamed=%d', self.session_id, len(assistant))
-            self.persisted = True
-            return
-        logger.warning('saving partial session=%s streamed=%d', self.session_id, len(assistant))
-        session.history.append(UserMessage(content))
-        if assistant:
-            session.history.append(AssistantMessage(assistant))
+        if len(session.history) <= saved:
+            session.history.append(UserMessage(content))
+            if assistant:
+                session.history.append(AssistantMessage(assistant))
+        logger.warning('saving partial session=%s loaded=%d streamed=%d', self.session_id, saved, len(assistant))
         await app.session_mgr.save(session.uuid)
         self.persisted = True
 
-    async def _load_session(self, manager: SessionManager) -> None:
+    async def _load_session(self, manager: SessionManager) -> bool:
         try:
             info = await self.client.get_session(self.session_id)
         except DataCloudError as error:
             if error.status_code != 404:
                 raise
-            return
+            logger.warning('session not found session=%s', self.session_id)
+            return False
         messages = await self.client.list_session_messages(self.session_id)
         manager.sessions_map[self.session_id] = Session(
             uuid=info['id'],
@@ -117,6 +115,7 @@ class ChatHelper:
             plan_items=[PlanItem(**item) for item in info.get('plan_items') or []],
             history=[message_from_dict(message['data']) for message in messages],
         )
+        return True
 
     async def chat(self, content: str, provider_name: str, agent_name: str) -> Session:
         self.persisted = False
@@ -142,7 +141,9 @@ class ChatHelper:
         async def collect(ev: AgentPayload[Chunk]) -> None:
             streamed.append(str(ev.payload.content))
 
-        await self._load_session(app.session_mgr)
+        if not await self._load_session(app.session_mgr):
+            logger.error('chat refused for a missing session session=%s', self.session_id)
+            raise DataCloudError(404, 'SESSION_NOT_FOUND', f'session not found: {self.session_id}')
         session = await app.session_mgr.get_or_create(self.session_id)
         needs_title = bool(content) and not session.title
         saved = len(session.history)
@@ -159,7 +160,9 @@ class ChatHelper:
 
     async def revert(self, message_id: str) -> Session | None:
         manager = SessionManager(CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
-        await self._load_session(manager)
+        if not await self._load_session(manager):
+            logger.warning('refusing to revert a missing session session=%s', self.session_id)
+            return None
         session = manager.sessions_map.get(self.session_id)
         if session is None:
             return None
