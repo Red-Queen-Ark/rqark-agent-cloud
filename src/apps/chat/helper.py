@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from time import monotonic
 
 from rqark_app.app import AgentApp, Session
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
@@ -20,6 +21,8 @@ from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE
 logger = logging.getLogger(__name__)
 
 SOURCE = 'AGENT_CLOUD'
+TOKEN_REFRESH_WAIT = 90.0
+TOKEN_REFRESH_POLL = 0.05
 
 
 def _build_client(token: str | None) -> RQArkDataCloudClient:
@@ -79,14 +82,31 @@ class ChatHelper:
         self.workspace = Workspace(user_id, image=SANDBOX_IMAGE)
         self.client = _build_client(token)
         self.persisted = False
+        self._token_generation = 0
+
+    @property
+    def token_generation(self) -> int:
+        return self._token_generation
 
     async def update_token(self, token: str | None) -> None:
-        if (token or '') == self.token:
+        fresh = token or ''
+        if fresh == self.token:
             return
-        previous, self.client = self.client, _build_client(token)
-        self.token = token or ''
+        self.token = fresh
+        self.client.config.api_key = fresh
+        self._token_generation += 1
         logger.info('chat token updated session=%s', self.session_id)
-        await previous.aclose()
+
+    async def wait_for_token(self, generation: int, timeout: float) -> bool:
+        deadline = monotonic() + timeout
+        while self._token_generation == generation:
+            if monotonic() >= deadline:
+                return False
+            await asyncio.sleep(TOKEN_REFRESH_POLL)
+        return True
+
+    def storage(self) -> CloudStorage:
+        return RefreshingStorage(self, source=SOURCE, list_source=SOURCE)
 
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) <= saved:
@@ -131,7 +151,7 @@ class ChatHelper:
         await self.workspace.ensure()
         agent = _build_agent(agent_info)
         swap_agent(agent, self.workspace)
-        app = AgentApp(providers, CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
+        app = AgentApp(providers, self.storage())
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
         stream = await connect_agent_event_to_room(app, self.room)
 
@@ -171,6 +191,24 @@ class ChatHelper:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+
+class RefreshingStorage(CloudStorage):
+    def __init__(self, helper: ChatHelper, source: str = '', list_source: str | None = None):
+        super().__init__(helper.client, source=source, list_source=list_source)
+        self._helper = helper
+
+    async def save(self, session: Session) -> None:
+        generation = self._helper.token_generation
+        try:
+            await super().save(session)
+        except DataCloudError as error:
+            if error.status_code != 401:
+                raise
+            logger.warning('session save refused, waiting for a fresh token session=%s', session.uuid)
+            if not await self._helper.wait_for_token(generation, TOKEN_REFRESH_WAIT):
+                raise
+            await super().save(session)
 
 
 async def revert_session(session_id: str, message_id: str, token: str, user_id: str) -> bool:

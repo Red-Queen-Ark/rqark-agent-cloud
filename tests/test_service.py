@@ -11,12 +11,16 @@ class StubRunner:
     def __init__(self):
         self.submitted = []
         self.stops = 0
+        self.tokens = []
 
     def submit(self, command):
         self.submitted.append(command)
 
     def stop(self):
         self.stops += 1
+
+    async def update_token(self, token):
+        self.tokens.append(token)
 
 
 class FakeConn:
@@ -131,3 +135,14 @@ async def test_forbidden_session_is_closed(monkeypatch, room_env):
     assert conn.close_code == 4403
     assert runner.submitted == []
     assert retired == []
+
+
+async def test_token_frame_adopts_the_fresh_token_without_chatting(monkeypatch, room_env):
+    runner, retired = make_env(monkeypatch)
+    conn = FakeConn(['{"kind":"token","token":"fresh"}'])
+
+    await service_module.chat_websocket(conn, 's11')
+
+    assert runner.tokens == ['fresh']
+    assert runner.submitted == []
+    assert retired == [('s11', 'u1')]

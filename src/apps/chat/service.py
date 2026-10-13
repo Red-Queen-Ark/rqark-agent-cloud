@@ -42,6 +42,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 if info.get('kind') == 'stop':
                     logger.info('websocket stop requested session=%s', session_id)
                     runner.stop()
+                elif info.get('kind') == 'token':
+                    logger.info('websocket token refreshed session=%s', session_id)
+                    await runner.update_token(info.get('token'))
                 else:
                     logger.info('websocket chat submitted session=%s provider=%s agent=%s', session_id, info.get('provider'), info.get('agent'))
                     runner.submit(ChatCommand(info['content'], info['provider'], info['agent']))

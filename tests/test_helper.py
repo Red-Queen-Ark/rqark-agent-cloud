@@ -11,15 +11,24 @@ from src.apps.chat import helper as helper_module
 from src.apps.chat.scope import room_key
 
 
+class FakeConfig:
+    def __init__(self, api_key):
+        self.api_key = api_key
+
+
 class FakeClient:
     def __init__(self, token):
-        self.token = token
+        self.config = FakeConfig(token)
         self.calls: list[str] = []
         self.closed = False
         self.session_info: dict | None = {'id': 's1', 'title': '', 'plan_items': [], 'created_at': '2026-01-01T00:00:00+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'}
         self.messages: list[dict] = []
         self.get_session_error: DataCloudError | None = None
         self.updated: dict | None = None
+
+    @property
+    def token(self) -> str:
+        return self.config.api_key
 
     async def list_agents(self):
         self.calls.append('list_agents')
@@ -333,23 +342,23 @@ async def test_session_load_error_is_raised(helper_env, monkeypatch):
     assert helper.persisted is False
 
 
-async def test_update_token_rebuilds_the_client(helper_env, monkeypatch):
-    seen: list[FakeClient] = []
+async def test_update_token_swaps_the_token_in_place(helper_env, monkeypatch):
+    built: list[FakeClient] = []
 
     def build(token):
         client = FakeClient(token)
-        seen.append(client)
+        built.append(client)
         return client
 
     monkeypatch.setattr(helper_module, '_build_client', build)
     helper = helper_module.ChatHelper('s1', 'old-token', 'u1')
-    first = helper.client
+    client = helper.client
 
     await helper.update_token('new-token')
 
-    assert helper.client is not first
-    assert helper.client.token == 'new-token'
-    assert first.closed is True
+    assert helper.client is client
+    assert client.token == 'new-token'
+    assert client.closed is False
     assert helper.token == 'new-token'
 
 
@@ -367,6 +376,7 @@ async def test_update_token_ignores_the_same_token(helper_env, monkeypatch):
     await helper.update_token('same')
     assert len(built) == 1
     assert helper.client.closed is False
+    assert helper.token_generation == 0
 
 
 async def test_chat_uses_the_updated_token(helper_env, monkeypatch):
@@ -382,8 +392,82 @@ async def test_chat_uses_the_updated_token(helper_env, monkeypatch):
     await helper.update_token('fresh')
     await helper.chat('hi', 'p', 'a')
 
-    assert seen[1].token == 'fresh'
-    assert seen[1].calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages']
+    assert seen[0].token == 'fresh'
+    assert seen[0].calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages']
+
+
+class ExpiredClient(FakeClient):
+    def __init__(self, token, failures=1):
+        super().__init__(token)
+        self.failures = failures
+
+    async def update_session(self, uuid, payload, source=None):
+        self.calls.append('update_session')
+        if self.failures > 0:
+            self.failures -= 1
+            raise DataCloudError(401, 'UNAUTHORIZED', 'token expired')
+        self.updated = payload
+        return {}
+
+
+async def test_save_retries_once_the_socket_hands_over_a_fresh_token(helper_env, monkeypatch):
+    seen: list[ExpiredClient] = []
+
+    def build(token):
+        client = ExpiredClient(token)
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    monkeypatch.setattr(helper_module, 'TOKEN_REFRESH_WAIT', 5.0)
+    helper = helper_module.ChatHelper('s1', 'stale', 'u1')
+    storage = helper.storage()
+
+    async def rotate():
+        await asyncio.sleep(0.05)
+        await helper.update_token('fresh')
+
+    awaiting = asyncio.create_task(rotate())
+    await storage.save(Session(uuid='s1'))
+    await awaiting
+
+    client = seen[0]
+    assert helper.client is client
+    assert client.token == 'fresh'
+    assert client.calls == ['update_session', 'update_session']
+    assert client.updated is not None
+
+
+async def test_save_gives_up_when_no_fresh_token_arrives(helper_env, monkeypatch):
+    def build(token):
+        return ExpiredClient(token, failures=99)
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    monkeypatch.setattr(helper_module, 'TOKEN_REFRESH_WAIT', 0.1)
+    helper = helper_module.ChatHelper('s1', 'stale', 'u1')
+
+    with pytest.raises(DataCloudError) as caught:
+        await helper.storage().save(Session(uuid='s1'))
+
+    assert caught.value.status_code == 401
+
+
+async def test_save_does_not_retry_other_failures(helper_env, monkeypatch):
+    calls: list[str] = []
+
+    class BrokenClient(FakeClient):
+        async def update_session(self, uuid, payload, source=None):
+            calls.append('update_session')
+            raise DataCloudError(500, 'INTERNAL', 'cloud down')
+
+    monkeypatch.setattr(helper_module, '_build_client', BrokenClient)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(DataCloudError) as caught:
+        await helper.storage().save(Session(uuid='s1'))
+
+    assert caught.value.status_code == 500
+    assert calls == ['update_session']
 
 
 async def test_agent_not_found_is_not_persisted(helper_env):
