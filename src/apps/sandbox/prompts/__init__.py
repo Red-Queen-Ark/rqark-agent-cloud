@@ -10,12 +10,7 @@ from src.apps.sandbox.workspace import Workspace
 
 __all__ = ['AgentsMdPrompt', 'GitProjectPrompt', 'PROMPTS', 'PlatformPrompt', 'WorkspacePrompt', 'swap_prompts']
 
-PROMPTS: dict[str, Callable[[Workspace], BasePrompt]] = {
-    'AgentsMdPrompt': AgentsMdPrompt,
-    'GitProjectPrompt': GitProjectPrompt,
-    'PlatformPrompt': lambda workspace: PlatformPrompt(),
-    'WorkspacePrompt': WorkspacePrompt,
-}
+PROMPTS: dict[str, Callable[[Workspace], BasePrompt]] = {'AgentsMdPrompt': AgentsMdPrompt, 'GitProjectPrompt': GitProjectPrompt, 'PlatformPrompt': lambda workspace: PlatformPrompt(), 'WorkspacePrompt': WorkspacePrompt}
 
 
 def swap_prompts(prompts: Sequence[BasePrompt], workspace: Workspace) -> list[BasePrompt]:

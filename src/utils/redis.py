@@ -16,7 +16,7 @@ def _init_pool() -> ConnectionPool | None:
     try:
         _pool = ConnectionPool.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=5)
     except Exception as exc:
-        logger.debug("Redis unavailable, caching disabled: %s", exc)
+        logger.debug('Redis unavailable, caching disabled: %s', exc)
         _pool = None  # type: ignore[assignment]
     return _pool
 

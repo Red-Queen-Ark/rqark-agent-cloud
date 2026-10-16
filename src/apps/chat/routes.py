@@ -21,6 +21,7 @@ class RevertRequest(BaseModel):
 async def websocket_endpoint_session(websocket: WebSocket, session_id: str):
     await chat_websocket(websocket, session_id)
 
+
 @router.get('/{session_id}/replay')
 async def replay_session(session_id: str, user: Annotated[dict, Depends(get_current_user)], token: Annotated[str, Depends(get_bearer)]):
     user_id = str(user.get('id') or '')
@@ -29,6 +30,7 @@ async def replay_session(session_id: str, user: Annotated[dict, Depends(get_curr
     if not await authorize_session(token, session_id):
         raise AuthError(403, 'FORBIDDEN', 'This session does not belong to you.')
     return await read(room_key(user_id, session_id))
+
 
 @router.post('/{session_id}/revert')
 async def revert_message(session_id: str, body: RevertRequest, user: Annotated[dict, Depends(get_current_user)], token: Annotated[str, Depends(get_bearer)]):

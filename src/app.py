@@ -6,11 +6,7 @@ from src.middleware import setup_cors, setup_exception_handlers
 
 
 def create_fastapi_app():
-    app = FastAPI(
-        docs_url=DOCS_URL,
-        redoc_url=REDOC_URL,
-        openapi_url=OPENAPI_URL,
-    )
+    app = FastAPI(docs_url=DOCS_URL, redoc_url=REDOC_URL, openapi_url=OPENAPI_URL)
     api = APIRouter(prefix=API_PREFIX)
 
     setup_cors(app)

@@ -8,13 +8,7 @@ from src.middleware.auth import AuthError
 
 
 def setup_cors(app: FastAPI) -> None:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=CORS_ORIGINS,
-        allow_credentials=CORS_ALLOW_CREDENTIALS,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_credentials=CORS_ALLOW_CREDENTIALS, allow_methods=['*'], allow_headers=['*'])
 
 
 def _auth_error_handler(_: Request, error: Exception) -> JSONResponse:

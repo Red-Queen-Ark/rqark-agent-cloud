@@ -172,10 +172,10 @@ class Workspace:
         try:
             container.start()
             return container
-        except (APIError, DockerException):
+        except APIError, DockerException:
             try:
                 container.remove(force=True)
-            except (APIError, DockerException):
+            except APIError, DockerException:
                 pass
             return self._create(client)
 
@@ -246,7 +246,7 @@ class Workspace:
             return
         try:
             container.stop(timeout=5)
-        except (APIError, DockerException):
+        except APIError, DockerException:
             pass
 
     async def remove(self) -> None:
@@ -258,7 +258,7 @@ class Workspace:
             return
         try:
             container.remove(force=True)
-        except (APIError, DockerException):
+        except APIError, DockerException:
             pass
 
     async def purge(self) -> None:
@@ -272,11 +272,11 @@ class Workspace:
             return
         try:
             client.volumes.get(self.name).remove(force=True)
-        except (APIError, DockerException, NotFound):
+        except APIError, DockerException, NotFound:
             pass
         try:
             client.networks.get(self.network_name).remove()
-        except (APIError, DockerException, NotFound):
+        except APIError, DockerException, NotFound:
             pass
 
     def _find(self) -> Container | None:
