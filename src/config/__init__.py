@@ -28,6 +28,13 @@ REDIS_URL = os.getenv('REDIS_URL') or f'redis://{REDIS_SERVER}:{REDIS_PORT}/0'
 DATA_CLOUD_URL = os.getenv('DATA_CLOUD_URL', 'http://localhost:7302')
 DATA_CLOUD_TIMEOUT = float(os.getenv('DATA_CLOUD_TIMEOUT', '30'))
 
+# Tasks
+INTERNAL_TOKEN = os.getenv('INTERNAL_TOKEN', '0a3be1ef5e090053bf78701be8c0fefdc955e5e878d26eed3ed1e26a0f5e9080')
+TASK_RUN_TIMEOUT = float(os.getenv('TASK_RUN_TIMEOUT', '600'))
+TASKS_ENABLED = _bool_env('TASKS_ENABLED', 'true')
+TASK_TICK_SECONDS = float(os.getenv('TASK_TICK_SECONDS', '30'))
+TASK_CONCURRENCY = _int_env('TASK_CONCURRENCY', '1')
+
 # Sandbox
 SANDBOX_IMAGE = os.getenv('SANDBOX_IMAGE', 'ubuntu:24.04')
 WORKSPACE_MAX_BYTES = _int_env('WORKSPACE_MAX_BYTES', str(100 * 1024 * 1024))

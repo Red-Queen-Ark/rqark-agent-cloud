@@ -8,6 +8,8 @@ services:
       - 8000:8000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - ./.env
     environment:
       - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ubuntu:24.04}
       - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
