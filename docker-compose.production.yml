@@ -22,6 +22,7 @@ services:
     container_name: ${PROJECT_NAME}-server
     networks:
       - rqark-project
+    stop_grace_period: 90s
     restart: unless-stopped
 
 networks:

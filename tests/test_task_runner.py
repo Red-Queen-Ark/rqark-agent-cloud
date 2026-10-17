@@ -50,14 +50,10 @@ class FakeWorkspace:
         self.user_id = user_id
         self.image = image
         self.ensured = False
-        self.stopped = False
         FakeWorkspace.instances.append(self)
 
     async def ensure(self):
         self.ensured = True
-
-    async def stop(self):
-        self.stopped = True
 
 
 class FakeSessionManager:
@@ -87,7 +83,7 @@ class FakeApp:
 
         return register
 
-    async def emit_content(self, text, agent_id='agent-1:session-1', path=()):
+    async def emit_content(self, text, path=()):
         handler = self.handlers.get('content')
         if handler:
             await handler(type('Ev', (), {'path': path, 'payload': runner_module.Chunk('content', text)})())
@@ -99,6 +95,8 @@ class FakeApp:
             await asyncio.sleep(30)
         if FakeApp.behavior == 'fail':
             raise RuntimeError('provider exploded')
+        if FakeApp.behavior == 'hang':
+            await asyncio.sleep(30)
 
 
 class SpyDataCloudClient:
@@ -157,7 +155,6 @@ async def test_a_successful_run_finalizes_ok(wired):
     assert client.finalized == [(TASK_ID, RUN_ID, 'ok', '', SESSION_ID)]
     assert wired[0].saved == []
     assert FakeWorkspace.instances[0].ensured is True
-    assert FakeWorkspace.instances[0].stopped is True
 
 
 async def test_a_timeout_is_reported_as_an_error_with_the_partial_text(wired, monkeypatch):
@@ -208,7 +205,49 @@ async def test_a_run_whose_workspace_fails_is_reported_rather_than_raised(wired,
 
     await execute(client, ClaimedRun.from_payload(PAYLOAD))
 
-    assert client.finalized == [(TASK_ID, RUN_ID, 'error', 'error', SESSION_ID)]
+    assert client.finalized[0][:3] == (TASK_ID, RUN_ID, 'error')
+    assert 'docker is down' in client.finalized[0][3]
+
+
+async def test_a_cancelled_run_is_reported_as_cancelled_not_failed(wired):
+    FakeApp.behavior = 'hang'
+    client = FakeClient()
+
+    task = asyncio.create_task(execute(client, ClaimedRun.from_payload(PAYLOAD)))
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.finalized == [(TASK_ID, RUN_ID, 'cancelled', '', SESSION_ID)]
+
+
+async def test_a_cancel_during_preparation_still_finalizes(wired, monkeypatch):
+    gate = asyncio.Event()
+
+    async def slow_open(run):
+        await gate.wait()
+        raise RunnerError('never reached')
+
+    monkeypatch.setattr(runner_module, '_build_and_open', slow_open)
+    client = FakeClient()
+
+    task = asyncio.create_task(execute(client, ClaimedRun.from_payload(PAYLOAD)))
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.finalized == [(TASK_ID, RUN_ID, 'cancelled', '', SESSION_ID)]
+
+
+async def test_the_runner_never_stops_the_workspace(wired):
+    """Two runs of one user share a sandbox, so a finishing run must not stop it."""
+    client = FakeClient()
+
+    await execute(client, ClaimedRun.from_payload(PAYLOAD))
+
+    assert not hasattr(FakeWorkspace.instances[0], 'stopped')
 
 
 async def test_the_runner_builds_its_client_from_the_run_token(monkeypatch):
@@ -271,7 +310,6 @@ def test_the_internal_client_sends_the_header_and_never_a_bearer_token():
 
     assert client.api_url == 'http://data-cloud:7302/api'
     assert client._headers() == {'X-Internal-Token': 'shared-secret'}
-    assert client.api_url.endswith('/api')
 
 
 async def test_run_once_claims_then_executes(monkeypatch):
@@ -293,5 +331,3 @@ async def test_run_once_claims_then_executes(monkeypatch):
     assert await runner_module.run_once(2) == 1
     assert client.claimed == [2]
     assert executed == [RUN_ID]
-
-

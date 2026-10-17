@@ -542,7 +542,13 @@ class Workspace:
         try:
             return client.volumes.get(self.name)
         except NotFound:
+            pass
+        try:
             return client.volumes.create(self.name)
+        except APIError as error:
+            if error.status_code != 409:
+                raise
+            return client.volumes.get(self.name)
 
     def _network(self, client: docker.DockerClient) -> str:
         labels = {'rqark.sandbox': '1', 'rqark.user': self.user_id}

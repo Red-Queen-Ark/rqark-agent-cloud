@@ -143,6 +143,26 @@ async def _save_transcript(storage: CloudStorage, run: ClaimedRun, text: str) ->
     await storage.save(session)
 
 
+async def _run_to_completion(coro: Any) -> None:
+    """Runs a cleanup step to the end even if the caller is cancelled again.
+
+    A shutdown cancels the run task; the cleanup below it then has to reach the
+    data cloud, which is an await of its own. A second cancellation arriving while
+    it is in flight would leave the run unfinalized, and the dispatcher would only
+    learn of it when the stale sweep fired — a run reported as lost that in fact
+    completed.
+    """
+    task = asyncio.create_task(coro)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            logger.error('cleanup aborted before it finished')
+        raise
+
+
 async def _finalize(client: InternalClient, run: ClaimedRun, status: str, error: str) -> None:
     try:
         await client.finalize(run.task_id, run.run_id, status, error, run.session_id)
@@ -157,44 +177,40 @@ async def execute(client: InternalClient, run: ClaimedRun) -> None:
     error = ''
     cancelled = False
 
-    try:
-        agent, app, storage, workspace = await _build_and_open(run)
-    except RunnerError as failure:
-        await _finalize(client, run, RUN_ERROR, failure.reason)
-        return
-    except Exception:
-        logger.exception('cannot prepare run=%s', run.run_id)
-        await _finalize(client, run, RUN_ERROR, RUN_ERROR)
-        return
-
     stream = LocalStream()
-    stream.connect(app)
+    storage: CloudStorage | None = None
+    app: AgentApp | None = None
+    agent: Any = None
 
     try:
+        agent, app, storage, _ = await _build_and_open(run)
+        stream.connect(app)
+
         session = await app.session_mgr.get_or_create(run.session_id)
         session.title = run.task_name
         await asyncio.wait_for(app.chat(run.prompt, agent, session_id=run.session_id), TASK_RUN_TIMEOUT)
+    except RunnerError as failure:
+        status, error = RUN_ERROR, failure.reason
     except TimeoutError:
         logger.warning('run timed out run=%s', run.run_id)
         status, error = RUN_ERROR, RUN_TIMEOUT
     except asyncio.CancelledError:
         logger.warning('run cancelled run=%s', run.run_id)
-        status, error = RUN_ERROR, RUN_CANCELLED
+        status, error = RUN_CANCELLED, ''
         cancelled = True
     except Exception as failure:
         logger.exception('run failed run=%s', run.run_id)
         status, error = RUN_ERROR, str(failure) or RUN_ERROR
     finally:
-        if status != RUN_OK:
-            try:
-                await _save_transcript(storage, run, stream.text)
-            except Exception:
-                logger.exception('cannot save the partial transcript run=%s', run.run_id)
-        try:
-            await workspace.stop()
-        except Exception:
-            logger.exception('cannot stop the workspace run=%s', run.run_id)
-        await _finalize(client, run, status, error)
+        async def close_out() -> None:
+            if storage is not None and status != RUN_OK:
+                try:
+                    await _save_transcript(storage, run, stream.text)
+                except Exception:
+                    logger.exception('cannot save the partial transcript run=%s', run.run_id)
+            await _finalize(client, run, status, error)
+
+        await _run_to_completion(close_out())
 
     if cancelled:
         raise asyncio.CancelledError

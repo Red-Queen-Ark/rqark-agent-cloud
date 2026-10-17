@@ -14,4 +14,5 @@ services:
       - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ubuntu:24.04}
       - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
       - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
+    stop_grace_period: 90s
     restart: unless-stopped
