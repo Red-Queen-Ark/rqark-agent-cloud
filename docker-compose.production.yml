@@ -10,6 +10,8 @@ services:
       - DATA_CLOUD_URL=http://server:7302
       - REDIS_SERVER=redis
       - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ubuntu:24.04}
+      - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
+      - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     container_name: ${PROJECT_NAME}-server

@@ -10,4 +10,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ubuntu:24.04}
+      - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
+      - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
     restart: unless-stopped
