@@ -122,7 +122,7 @@ class FakeApp:
         self.chat_helper = FakeInnerHelper()
         self.stream = event_module.RoomStream()
 
-    async def chat(self, content, agent, session_id=None):
+    async def chat(self, content, agent, session_id=None, extras=None):
         if FakeApp.behavior is not None:
             await FakeApp.behavior(self)
         await self.session_mgr.save(session_id or 's1')

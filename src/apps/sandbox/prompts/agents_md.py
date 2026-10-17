@@ -1,6 +1,6 @@
 import shlex
 
-from rqark_core.types.prompt import BasePrompt
+from rqark_core.types.prompt import BasePrompt, PromptContext
 
 from src.apps.sandbox.workspace import Workspace
 
@@ -13,7 +13,7 @@ class AgentsMdPrompt(BasePrompt):
     def __init__(self, workspace: Workspace):
         self.workspace = workspace
 
-    def get_messages(self) -> str | None:
+    async def get_messages(self, ctx: PromptContext | None = None) -> str | None:
         path = f'{self.workspace.WORKDIR}/{AGENTS_MD}'
         result = self.workspace.run_shell(f'cat -- {shlex.quote(path)}')
         if result.exit_code != 0:

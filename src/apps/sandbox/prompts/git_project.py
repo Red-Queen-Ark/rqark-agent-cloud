@@ -1,6 +1,6 @@
 import shlex
 
-from rqark_core.types.prompt import BasePrompt
+from rqark_core.types.prompt import BasePrompt, PromptContext
 
 from src.apps.sandbox.workspace import Workspace
 
@@ -17,7 +17,7 @@ class GitProjectPrompt(BasePrompt):
             return None
         return result.stdout.strip() or None
 
-    def get_messages(self) -> str | None:
+    async def get_messages(self, ctx: PromptContext | None = None) -> str | None:
         if self.workspace.run_shell(f'[ -d {shlex.quote(self.workspace.WORKDIR + "/.git")} ]').exit_code != 0:
             return None
 

@@ -8,6 +8,7 @@ from rqark_app.app import AgentApp
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
 from rqark_app.config.manager import _build_agent, _build_provider
 from rqark_app.session.storage import CloudStorage
+from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, SOURCE_KEY
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import Session
 from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
@@ -107,7 +108,7 @@ class LocalStream:
                 self._chunks.append(str(chunk.content))
 
 
-def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace]:
+def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace, dict[str, object]]:
     try:
         agent = _build_agent(run.agent_def)
     except (KeyError, ValueError) as error:
@@ -125,13 +126,13 @@ def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace]
     app = AgentApp([provider], storage)
     app.provider_mgr.switch_to(0)
 
-    return agent, app, storage, workspace
+    return agent, app, storage, workspace, {CLIENT_KEY: client, AGENT_KEY: str(run.agent_def.get('id') or ''), SOURCE_KEY: TASK_SOURCE}
 
 
-async def _build_and_open(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace]:
-    agent, app, storage, workspace = _build_app(run)
+async def _build_and_open(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace, dict[str, object]]:
+    agent, app, storage, workspace, extras = _build_app(run)
     await workspace.ensure()
-    return agent, app, storage, workspace
+    return agent, app, storage, workspace, extras
 
 
 async def _save_transcript(storage: CloudStorage, run: ClaimedRun, text: str) -> None:
@@ -181,14 +182,15 @@ async def execute(client: InternalClient, run: ClaimedRun) -> None:
     storage: CloudStorage | None = None
     app: AgentApp | None = None
     agent: Any = None
+    extras: dict[str, object] | None = None
 
     try:
-        agent, app, storage, _ = await _build_and_open(run)
+        agent, app, storage, _, extras = await _build_and_open(run)
         stream.connect(app)
 
         session = await app.session_mgr.get_or_create(run.session_id)
         session.title = run.task_name
-        await asyncio.wait_for(app.chat(run.prompt, agent, session_id=run.session_id), TASK_RUN_TIMEOUT)
+        await asyncio.wait_for(app.chat(run.prompt, agent, session_id=run.session_id, extras=extras), TASK_RUN_TIMEOUT)
     except RunnerError as failure:
         status, error = RUN_ERROR, failure.reason
     except TimeoutError:
@@ -202,6 +204,7 @@ async def execute(client: InternalClient, run: ClaimedRun) -> None:
         logger.exception('run failed run=%s', run.run_id)
         status, error = RUN_ERROR, str(failure) or RUN_ERROR
     finally:
+
         async def close_out() -> None:
             if storage is not None and status != RUN_OK:
                 try:

@@ -1,4 +1,4 @@
-from rqark_core.types.prompt import BasePrompt
+from rqark_core.types.prompt import BasePrompt, PromptContext
 
 from src.apps.sandbox.workspace import Workspace
 
@@ -9,5 +9,5 @@ class WorkspacePrompt(BasePrompt):
     def __init__(self, workspace: Workspace):
         self.workspace = workspace
 
-    def get_messages(self) -> str:
+    async def get_messages(self, ctx: PromptContext | None = None) -> str:
         return f'## Workspace\nCurrent workspace: {self.workspace.WORKDIR}'

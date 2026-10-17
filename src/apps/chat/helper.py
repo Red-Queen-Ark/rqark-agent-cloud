@@ -7,6 +7,7 @@ from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
 from rqark_app.config.manager import _build_agent, _build_provider
 from rqark_app.session.manager import SessionManager
 from rqark_app.session.storage import CloudStorage
+from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, SOURCE_KEY
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
 from rqark_core.types.chat import AssistantMessage, UserMessage
@@ -108,6 +109,11 @@ class ChatHelper:
     def storage(self) -> CloudStorage:
         return RefreshingStorage(self, source=SOURCE, list_source=SOURCE)
 
+    def extras(self, agent_id: str | None) -> dict[str, object] | None:
+        if not agent_id:
+            return None
+        return {CLIENT_KEY: self.client, AGENT_KEY: agent_id, SOURCE_KEY: SOURCE}
+
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) <= saved:
             session.history.append(UserMessage(content))
@@ -163,7 +169,7 @@ class ChatHelper:
         saved = len(session.history)
         logger.info('chat request session=%s provider=%s agent=%s context=%d', self.session_id, provider_name, agent_name, saved)
         try:
-            await app.chat(content, agent, session_id=self.session_id)
+            await app.chat(content, agent, session_id=self.session_id, extras=self.extras(agent_info.get('id')))
         except asyncio.CancelledError:
             await self._save_partial(app, session, saved, content, stream.text)
             raise

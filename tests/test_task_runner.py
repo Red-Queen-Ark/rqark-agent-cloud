@@ -138,7 +138,7 @@ def wired(monkeypatch):
         workspace = FakeWorkspace(run.user_id)
         agent = type('Agent', (), {'name': 'assistant'})()
         await workspace.ensure()
-        return agent, app, storage, workspace
+        return agent, app, storage, workspace, {'agent_id': 'agent-1'}
 
     monkeypatch.setattr(runner_module, '_build_and_open', build_and_open)
     monkeypatch.setattr(runner_module, 'Workspace', FakeWorkspace)
@@ -257,7 +257,7 @@ async def test_the_runner_builds_its_client_from_the_run_token(monkeypatch):
     SpyDataCloudClient.instances = []
 
     run = ClaimedRun.from_payload(PAYLOAD)
-    _, app, storage, _ = runner_module._build_app(run)
+    _, app, storage, _, _ = runner_module._build_app(run)
 
     assert SpyDataCloudClient.instances[0].config.api_key == 'run-token'
     assert SpyDataCloudClient.instances[0].calls == []
