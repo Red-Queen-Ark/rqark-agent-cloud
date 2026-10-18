@@ -14,13 +14,13 @@ import uuid
 import zipfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import IO, Any, cast
+from typing import IO, Any
 
 from docker.errors import APIError, DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
 
 import docker
-from src.config import WORKSPACE_MAX_BYTES
+from src.config import WORKSPACE_MAX_BYTES, WORKSPACE_SHELL_MAX_BYTES
 
 
 class WorkspaceError(Exception):
@@ -74,11 +74,69 @@ def _text(data: bytes | None) -> str:
     return data.decode('utf-8', errors='replace') if data else ''
 
 
-def _drain(stream: Iterator[bytes]) -> bytes:
-    buffer = io.BytesIO()
-    for chunk in stream:
-        buffer.write(chunk)
-    return buffer.getvalue()
+class _IteratorReader(io.RawIOBase):
+    """Adapts docker's chunk iterator into a file object, so tar reads it lazily."""
+
+    def __init__(self, chunks: Iterator[bytes]):
+        self._chunks = chunks
+        self._pending = b''
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        while not self._pending:
+            try:
+                self._pending = next(self._chunks)
+            except StopIteration:
+                return 0
+        size = min(len(buffer), len(self._pending))
+        buffer[:size] = self._pending[:size]
+        self._pending = self._pending[size:]
+        return size
+
+
+def _close_quietly(stream: Any) -> None:
+    close = getattr(stream, 'close', None)
+    if close is not None:
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def _open_archive(stream: Any) -> tarfile.TarFile:
+    """Streams a docker archive instead of draining it whole into memory first."""
+    if hasattr(stream, 'read'):
+        return tarfile.open(fileobj=stream, mode='r|')
+    return tarfile.open(fileobj=io.BufferedReader(_IteratorReader(iter(stream))), mode='r|')
+
+
+def _drain_capped(chunks: Iterator[Any], limit: int) -> tuple[bytes, bytes, bool]:
+    """Reads a demuxed exec stream, keeping at most `limit` bytes in total.
+
+    The rest is still consumed (and dropped) so docker closes the exec socket
+    and the exit code stays inspectable.
+    """
+    stdout_parts: list[bytes] = []
+    stderr_parts: list[bytes] = []
+    size = 0
+    truncated = False
+    for chunk in chunks:
+        stdout, stderr = chunk if isinstance(chunk, tuple) else (chunk, None)
+        for part, sink in ((stdout, stdout_parts), (stderr, stderr_parts)):
+            if not part or truncated:
+                continue
+            room = limit - size
+            if room <= 0:
+                truncated = True
+                continue
+            if len(part) > room:
+                part = part[:room]
+                truncated = True
+            sink.append(part)
+            size += len(part)
+    return b''.join(stdout_parts), b''.join(stderr_parts), truncated
 
 
 @dataclass(frozen=True)
@@ -620,12 +678,17 @@ class Workspace:
     def _raw(self, script: str, cwd: str | None = None) -> ShellResult:
         try:
             container = self._ensure()
-            result = container.exec_run(cmd=['/bin/sh', '-c', script], demux=True, workdir=cwd or self.WORKDIR)
+            api = _client_instance().api
+            exec_id = api.exec_create(container.id, cmd=['/bin/sh', '-c', script], workdir=cwd or self.WORKDIR)['Id']
+            stdout, stderr, truncated = _drain_capped(api.exec_start(exec_id, stream=True, demux=True), WORKSPACE_SHELL_MAX_BYTES)
+            info = api.exec_inspect(exec_id)
         except (APIError, DockerException, NotFound) as error:
             return ShellResult(-1, '', str(error))
-        stdout, stderr = cast('tuple[bytes | None, bytes | None]', result.output)
-        exit_code = result.exit_code if result.exit_code is not None else -1
-        return ShellResult(exit_code, _text(stdout), _text(stderr))
+        exit_code = info.get('ExitCode')
+        out = _text(stdout)
+        if truncated:
+            out += f'\n… (output truncated at {WORKSPACE_SHELL_MAX_BYTES} bytes)'
+        return ShellResult(exit_code if exit_code is not None else -1, out, _text(stderr))
 
     def run_shell(self, command: str, cwd: str | None = None, timeout: int = 60, interpreter: str = '/bin/sh') -> ShellResult:
         return self._raw(f'exec timeout -k 5 {timeout} {interpreter} -c {shlex.quote(command)}', cwd)
@@ -642,13 +705,22 @@ class Workspace:
             stream, _ = container.get_archive(path)
         except NotFound as error:
             raise FileMissingError(f'file not found: {path}') from error
-        with tarfile.open(fileobj=io.BytesIO(_drain(stream)), mode='r') as tar:
-            for member in tar.getmembers():
-                if member.isdir():
-                    raise IsDirectoryError(f'path is a directory: {path}')
-                if member.isfile():
+        try:
+            with _open_archive(stream) as tar:
+                for member in tar:
+                    if member.isdir():
+                        raise IsDirectoryError(f'path is a directory: {path}')
+                    if not member.isfile():
+                        continue
+                    if member.size > WORKSPACE_MAX_BYTES:
+                        raise FileTooLargeError(f'file is too large: {path}')
                     handle = tar.extractfile(member)
-                    return handle.read() if handle is not None else b''
+                    data = handle.read() if handle is not None else b''
+                    if len(data) > WORKSPACE_MAX_BYTES:
+                        raise FileTooLargeError(f'file is too large: {path}')
+                    return data
+        finally:
+            _close_quietly(stream)
         raise FileMissingError(f'file not found: {path}')
 
     async def write_bytes(self, path: str, data: bytes) -> None:

@@ -15,7 +15,7 @@ from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
 
 from src.apps.sandbox import swap_agent
 from src.apps.sandbox.workspace import Workspace
-from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, INTERNAL_TOKEN, SANDBOX_IMAGE, TASK_RUN_TIMEOUT
+from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, INTERNAL_TOKEN, SANDBOX_IMAGE, TASK_RUN_TIMEOUT, TASK_STREAM_MAX_CHARS, WORKSPACE_START_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +91,39 @@ class InternalClient:
 
 
 class LocalStream:
-    def __init__(self) -> None:
+    """Collects the run's final text without keeping an unbounded buffer.
+
+    A runaway agent can stream for the whole TASK_RUN_TIMEOUT; the transcript
+    only needs a sane prefix of it, so the buffer stops growing at max_chars.
+    """
+
+    def __init__(self, max_chars: int = TASK_STREAM_MAX_CHARS) -> None:
         self._chunks: list[str] = []
+        self._size = 0
+        self._max = max_chars
+        self.truncated = False
 
     @property
     def text(self) -> str:
         return ''.join(self._chunks)
+
+    def _append(self, text: str) -> None:
+        if self._max <= 0:
+            self._chunks.append(text)
+            return
+        if self.truncated or not text:
+            return
+        room = self._max - self._size
+        if room <= 0:
+            self.truncated = True
+            logger.warning('run output exceeded %d chars, dropping the rest', self._max)
+            return
+        if len(text) > room:
+            text = text[:room]
+            self.truncated = True
+            logger.warning('run output exceeded %d chars, dropping the rest', self._max)
+        self._chunks.append(text)
+        self._size += len(text)
 
     def connect(self, app: AgentApp) -> None:
         @app.on_content()
@@ -105,7 +132,7 @@ class LocalStream:
                 return
             chunk = ev.payload
             if isinstance(chunk, Chunk) and chunk.type == 'content':
-                self._chunks.append(str(chunk.content))
+                self._append(str(chunk.content))
 
 
 def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace, dict[str, object]]:
@@ -129,9 +156,28 @@ def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace,
     return agent, app, storage, workspace, {CLIENT_KEY: client, AGENT_KEY: str(run.agent_def.get('id') or ''), SOURCE_KEY: TASK_SOURCE}
 
 
+async def _close_client(extras: dict[str, object] | None) -> None:
+    """Releases the per-run data cloud client, whose httpx pool outlives a run otherwise."""
+    client = (extras or {}).get(CLIENT_KEY)
+    close = getattr(client, 'aclose', None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception:
+        logger.exception('cannot close the data cloud client')
+
+
 async def _build_and_open(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace, dict[str, object]]:
     agent, app, storage, workspace, extras = _build_app(run)
-    await workspace.ensure()
+    try:
+        await asyncio.wait_for(workspace.ensure(), WORKSPACE_START_TIMEOUT)
+    except TimeoutError as error:
+        await _close_client(extras)
+        raise RunnerError('WORKSPACE_TIMEOUT') from error
+    except BaseException:
+        await _close_client(extras)
+        raise
     return agent, app, storage, workspace, extras
 
 
@@ -144,6 +190,17 @@ async def _save_transcript(storage: CloudStorage, run: ClaimedRun, text: str) ->
     await storage.save(session)
 
 
+_background_cleanups: set[asyncio.Task] = set()
+
+
+def _discard_cleanup(task: asyncio.Task) -> None:
+    _background_cleanups.discard(task)
+    if not task.cancelled():
+        error = task.exception()
+        if error is not None:
+            logger.error('cleanup failed', exc_info=error)
+
+
 async def _run_to_completion(coro: Any) -> None:
     """Runs a cleanup step to the end even if the caller is cancelled again.
 
@@ -152,6 +209,10 @@ async def _run_to_completion(coro: Any) -> None:
     it is in flight would leave the run unfinalized, and the dispatcher would only
     learn of it when the stale sweep fired — a run reported as lost that in fact
     completed.
+
+    When the second cancellation lands anyway, the cleanup keeps running in the
+    background instead of being dropped: an unreferenced task can be collected
+    mid-flight, and its exceptions would never be reported.
     """
     task = asyncio.create_task(coro)
     try:
@@ -160,7 +221,9 @@ async def _run_to_completion(coro: Any) -> None:
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
-            logger.error('cleanup aborted before it finished')
+            _background_cleanups.add(task)
+            task.add_done_callback(_discard_cleanup)
+            logger.warning('cleanup is still running in the background')
         raise
 
 
@@ -206,12 +269,15 @@ async def execute(client: InternalClient, run: ClaimedRun) -> None:
     finally:
 
         async def close_out() -> None:
-            if storage is not None and status != RUN_OK:
-                try:
-                    await _save_transcript(storage, run, stream.text)
-                except Exception:
-                    logger.exception('cannot save the partial transcript run=%s', run.run_id)
-            await _finalize(client, run, status, error)
+            try:
+                if storage is not None and status != RUN_OK:
+                    try:
+                        await _save_transcript(storage, run, stream.text)
+                    except Exception:
+                        logger.exception('cannot save the partial transcript run=%s', run.run_id)
+                await _finalize(client, run, status, error)
+            finally:
+                await _close_client(extras)
 
         await _run_to_completion(close_out())
 

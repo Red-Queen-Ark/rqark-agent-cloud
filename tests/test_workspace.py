@@ -219,3 +219,41 @@ def test_upload_enforces_the_size_cap(client, monkeypatch):
     response = client.post('/api/workspace/upload', headers=HEADERS, files=[('files', ('a.txt', b'hello', 'text/plain'))])
     assert response.status_code == 413
     assert client.fake.uploads == []
+
+
+def test_shell_output_is_capped_and_still_complete():
+    from src.apps.sandbox import workspace as ws
+
+    chunks = [(b'a' * 6, None), (None, b'b' * 6), (b'c' * 6, None)]
+    stdout, stderr, truncated = ws._drain_capped(iter(chunks), 10)
+
+    assert stdout == b'aaaaaa'
+    assert stderr == b'bbbb'
+    assert truncated is True
+
+
+def test_shell_output_under_the_cap_is_kept_whole():
+    from src.apps.sandbox import workspace as ws
+
+    stdout, stderr, truncated = ws._drain_capped(iter([(b'ok', b'')]), 10)
+
+    assert (stdout, stderr, truncated) == (b'ok', b'', False)
+
+
+def test_an_archive_is_read_through_its_header_before_any_body():
+    import io
+    import tarfile
+
+    from src.apps.sandbox import workspace as ws
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w') as tar:
+        info = tarfile.TarInfo('a.txt')
+        info.size = 5
+        tar.addfile(info, io.BytesIO(b'hello'))
+    data = buffer.getvalue()
+
+    with ws._open_archive(iter([data[:512], data[512:]])) as tar:
+        member = next(iter(tar))
+        assert member.size == 5
+        assert tar.extractfile(member).read() == b'hello'

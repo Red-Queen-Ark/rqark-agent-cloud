@@ -331,3 +331,75 @@ async def test_run_once_claims_then_executes(monkeypatch):
     assert await runner_module.run_once(2) == 1
     assert client.claimed == [2]
     assert executed == [RUN_ID]
+
+
+class CloseSpy:
+    def __init__(self):
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+def _with_client(monkeypatch, workspace):
+    spy = CloseSpy()
+
+    async def build_and_open(run):
+        app = FakeApp(FakeStorage())
+        return type('Agent', (), {'name': 'assistant'})(), app, FakeStorage(), workspace, {runner_module.CLIENT_KEY: spy}
+
+    monkeypatch.setattr(runner_module, '_build_and_open', build_and_open)
+    return spy
+
+
+async def test_a_finished_run_closes_its_data_cloud_client(monkeypatch):
+    spy = _with_client(monkeypatch, FakeWorkspace(USER_ID))
+
+    await execute(FakeClient(), ClaimedRun.from_payload(PAYLOAD))
+
+    assert spy.closed is True
+
+
+async def test_a_workspace_that_never_starts_closes_the_client_and_reports_it(monkeypatch):
+    class StuckWorkspace:
+        def __init__(self, user_id, image=''):
+            pass
+
+        async def ensure(self):
+            await asyncio.sleep(30)
+
+    spy = CloseSpy()
+
+    def build_app(run):
+        app = FakeApp(FakeStorage())
+        return type('Agent', (), {'name': 'assistant'})(), app, FakeStorage(), StuckWorkspace(run.user_id), {runner_module.CLIENT_KEY: spy}
+
+    monkeypatch.setattr(runner_module, '_build_app', build_app)
+    monkeypatch.setattr(runner_module, 'WORKSPACE_START_TIMEOUT', 0.05)
+    client = FakeClient()
+
+    await execute(client, ClaimedRun.from_payload(PAYLOAD))
+
+    assert client.finalized == [(TASK_ID, RUN_ID, 'error', 'WORKSPACE_TIMEOUT', SESSION_ID)]
+    assert spy.closed is True
+
+
+def test_the_local_stream_stops_growing_at_its_limit():
+    stream = runner_module.LocalStream(max_chars=10)
+
+    stream._append('abc')
+    stream._append('defghij')
+    stream._append('more')
+
+    assert stream.text == 'abcdefghij'
+    assert stream.truncated is True
+
+
+def test_the_local_stream_keeps_everything_under_its_limit():
+    stream = runner_module.LocalStream(max_chars=10)
+
+    stream._append('abc')
+    stream._append('def')
+
+    assert stream.text == 'abcdef'
+    assert stream.truncated is False
