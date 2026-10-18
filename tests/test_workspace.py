@@ -257,3 +257,17 @@ def test_an_archive_is_read_through_its_header_before_any_body():
         member = next(iter(tar))
         assert member.size == 5
         assert tar.extractfile(member).read() == b'hello'
+
+
+def test_a_corrupt_archive_is_a_workspace_error_not_a_crash():
+    from src.apps.sandbox import workspace as ws
+
+    class FakeContainer:
+        def get_archive(self, path):
+            return iter([b'not a tar archive at all']), {}
+
+    workspace = ws.Workspace('u1')
+    workspace._ensure = lambda: FakeContainer()
+
+    with pytest.raises(ws.WorkspaceError):
+        workspace._read_bytes('/workspace/a.txt')

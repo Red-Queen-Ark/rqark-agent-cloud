@@ -24,6 +24,21 @@ RUN = ClaimedRun(
 def configured(monkeypatch):
     monkeypatch.setattr(loop_module, 'INTERNAL_TOKEN', 'test-token')
     monkeypatch.setattr(loop_module, 'DATA_CLOUD_URL', 'http://data-cloud:7302')
+    monkeypatch.setattr(loop_module, 'LeaderLease', AlwaysLeader)
+
+
+class AlwaysLeader:
+    """Stands in for the redis lease so a loop test never needs a broker."""
+
+    def __init__(self, key='tasks:leader', ttl=30):
+        self.is_leader = True
+        self.key = key
+
+    async def start(self):
+        return None
+
+    async def stop(self):
+        return None
 
 
 class FakeClient:

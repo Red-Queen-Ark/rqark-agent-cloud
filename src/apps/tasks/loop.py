@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
+from src.apps.tasks.leader import LeaderLease
 from src.apps.tasks.runner import ClaimedRun, InternalClient, execute
 from src.config import DATA_CLOUD_URL, INTERNAL_TOKEN, TASK_CONCURRENCY, TASK_TICK_SECONDS
 
@@ -17,15 +18,18 @@ class TaskLoop:
         concurrency: int = TASK_CONCURRENCY,
         tick_seconds: float = TASK_TICK_SECONDS,
         runner: Callable[..., Awaitable[None]] = execute,
+        lease: LeaderLease | None = None,
     ):
         self.client = client or InternalClient()
         self.concurrency = max(concurrency, 1)
         self.tick_seconds = tick_seconds if tick_seconds > 0 else 1.0
         self._runner = runner
+        self._lease = lease or LeaderLease()
         self._inflight: set[asyncio.Task] = set()
         self._task: asyncio.Task | None = None
         self._blocked_logged = False
         self._not_configured_logged = False
+        self._not_leader_logged = False
 
     @property
     def configured(self) -> bool:
@@ -40,8 +44,9 @@ class TaskLoop:
     async def start(self) -> None:
         if self._task is not None:
             return
+        await self._lease.start()
         self._task = asyncio.create_task(self._run())
-        logger.info('task loop started tick=%.1fs concurrency=%d', self.tick_seconds, self.concurrency)
+        logger.info('task loop started tick=%.1fs concurrency=%d leader=%s', self.tick_seconds, self.concurrency, self._lease.is_leader)
 
     async def stop(self) -> None:
         task = self._task
@@ -61,9 +66,16 @@ class TaskLoop:
                 await run
             except (asyncio.CancelledError, Exception):
                 pass
+        await self._lease.stop()
         logger.info('task loop stopped')
 
     async def tick(self) -> int:
+        if not self._lease.is_leader:
+            if not self._not_leader_logged:
+                self._not_leader_logged = True
+                logger.info('task loop idle: another worker holds the lease')
+            return 0
+        self._not_leader_logged = False
         slots = self.free_slots()
         if slots == 0:
             return 0

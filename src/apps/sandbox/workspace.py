@@ -676,14 +676,18 @@ class Workspace:
             return self._container(client)
 
     def _raw(self, script: str, cwd: str | None = None) -> ShellResult:
+        stream = None
         try:
             container = self._ensure()
             api = _client_instance().api
             exec_id = api.exec_create(container.id, cmd=['/bin/sh', '-c', script], workdir=cwd or self.WORKDIR)['Id']
-            stdout, stderr, truncated = _drain_capped(api.exec_start(exec_id, stream=True, demux=True), WORKSPACE_SHELL_MAX_BYTES)
+            stream = api.exec_start(exec_id, stream=True, demux=True)
+            stdout, stderr, truncated = _drain_capped(stream, WORKSPACE_SHELL_MAX_BYTES)
             info = api.exec_inspect(exec_id)
         except (APIError, DockerException, NotFound) as error:
             return ShellResult(-1, '', str(error))
+        finally:
+            _close_quietly(stream)
         exit_code = info.get('ExitCode')
         out = _text(stdout)
         if truncated:
@@ -719,6 +723,8 @@ class Workspace:
                     if len(data) > WORKSPACE_MAX_BYTES:
                         raise FileTooLargeError(f'file is too large: {path}')
                     return data
+        except tarfile.TarError as error:
+            raise WorkspaceError(f'cannot read archive for {path}: {error}') from error
         finally:
             _close_quietly(stream)
         raise FileMissingError(f'file not found: {path}')

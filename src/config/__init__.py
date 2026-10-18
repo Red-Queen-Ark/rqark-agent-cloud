@@ -35,6 +35,7 @@ TASKS_ENABLED = _bool_env('TASKS_ENABLED', 'true')
 TASK_TICK_SECONDS = float(os.getenv('TASK_TICK_SECONDS', '30'))
 TASK_CONCURRENCY = _int_env('TASK_CONCURRENCY', '1')
 TASK_STREAM_MAX_CHARS = _int_env('TASK_STREAM_MAX_CHARS', str(200_000))
+TASK_LEADER_TTL = float(os.getenv('TASK_LEADER_TTL', '60'))
 
 # Sandbox
 SANDBOX_IMAGE = os.getenv('SANDBOX_IMAGE', 'ubuntu:24.04')

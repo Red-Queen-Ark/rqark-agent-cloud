@@ -207,3 +207,19 @@ async def _reset_room():
     room_module._sockets.clear()
     room_module._subscribed.clear()
     await asyncio.sleep(0)
+
+
+@pytest.fixture(autouse=True)
+def _no_broker(monkeypatch):
+    """Keeps the task lease off a real Redis, and the task loop off a real data cloud."""
+    from src.apps.tasks import leader as leader_module
+    from src.apps.tasks import loop as loop_module
+
+    fake = FakeRedis()
+
+    async def get_redis():
+        return fake
+
+    monkeypatch.setattr(leader_module, 'get_redis', get_redis)
+    monkeypatch.setattr(loop_module, 'DATA_CLOUD_URL', '')
+    monkeypatch.setattr(loop_module, 'INTERNAL_TOKEN', '')
