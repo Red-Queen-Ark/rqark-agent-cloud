@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from rqark_app.cloud.client import DataCloudError
-from rqark_app.types.session import Session
+from rqark_app.types.session import Session, SummaryMessage
 from rqark_core.types.chat import AssistantMessage, UserMessage
 
 from src.apps.chat import event as event_module
@@ -17,6 +17,8 @@ class FakeConfig:
 
 
 class FakeClient:
+    sops: list[dict] = []
+
     def __init__(self, token):
         self.config = FakeConfig(token)
         self.calls: list[str] = []
@@ -51,6 +53,10 @@ class FakeClient:
     async def list_sessions(self, source=None):
         self.calls.append('list_sessions')
         return []
+
+    async def list_sops(self):
+        self.calls.append('list_sops')
+        return self.sops
 
     async def update_session(self, uuid, payload, source=None):
         self.calls.append('update_session')
@@ -99,6 +105,17 @@ class FakeSessionManager:
         self.saved.append(uuid)
 
 
+class FakeCompactor:
+    summary: str | None = 'a summary'
+
+    def __init__(self):
+        self.summaries: list[list] = []
+
+    async def get_summary(self, messages):
+        self.summaries.append(list(messages))
+        return SummaryMessage(self.summary) if self.summary is not None else None
+
+
 class FakeInnerHelper:
     def __init__(self):
         self.titles: list[tuple[str, str]] = []
@@ -120,9 +137,12 @@ class FakeApp:
         self.provider_mgr = FakeProviderManager(providers)
         self.session_mgr = FakeSessionManager(FakeApp.fail_save)
         self.chat_helper = FakeInnerHelper()
+        self.compactor = FakeCompactor()
         self.stream = event_module.RoomStream()
+        self.chats: list[str] = []
 
     async def chat(self, content, agent, session_id=None, extras=None):
+        self.chats.append(content)
         if FakeApp.behavior is not None:
             await FakeApp.behavior(self)
         await self.session_mgr.save(session_id or 's1')
@@ -133,6 +153,8 @@ def helper_env(monkeypatch):
     FakeApp.last = None
     FakeApp.behavior = None
     FakeApp.fail_save = False
+    FakeClient.sops = []
+    FakeCompactor.summary = 'a summary'
     monkeypatch.setattr(helper_module, '_build_client', FakeClient)
     monkeypatch.setattr(helper_module, '_build_provider', FakeProvider)
     monkeypatch.setattr(helper_module, '_build_agent', lambda info: SimpleNamespace(prompts=[], tools=[]))
@@ -302,7 +324,7 @@ async def test_session_is_loaded_with_two_requests(helper_env, monkeypatch):
 
     client = seen[0]
     assert 'list_sessions' not in client.calls
-    assert client.calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages']
+    assert client.calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages', 'list_sops']
     session = FakeApp.last.session_mgr.sessions_map['s1']
     assert [message.content for message in session.history] == ['older']
     assert session.title == ''
@@ -393,7 +415,7 @@ async def test_chat_uses_the_updated_token(helper_env, monkeypatch):
     await helper.chat('hi', 'p', 'a')
 
     assert seen[0].token == 'fresh'
-    assert seen[0].calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages']
+    assert seen[0].calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages', 'list_sops']
 
 
 class ExpiredClient(FakeClient):
@@ -635,3 +657,67 @@ async def test_revert_session_closes_the_client(helper_env, monkeypatch):
 
     assert await helper_module.revert_session('s1', 'm2', 't', 'u1') is True
     assert seen[0].closed is True
+
+
+async def test_a_sop_command_is_sent_as_the_rewritten_message(helper_env):
+    FakeClient.sops = [{'slug': 'trip-itinerary', 'title': 'Trip itinerary', 'content': '# Trip itinerary\n\nPlan it.'}]
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('/trip-itinerary 幫我安排大阪行程', 'p', 'a')
+
+    assert FakeApp.last.chats == ['#trip-itinerary 幫我安排大阪行程\n\n# Trip itinerary\n\nPlan it.']
+    assert FakeApp.last.chat_helper.titles == [('s1', '/trip-itinerary 幫我安排大阪行程')]
+
+
+async def test_a_message_that_names_no_sop_is_sent_as_typed(helper_env):
+    FakeClient.sops = []
+    FakeCompactor.summary = 'a summary'
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('/nope hello', 'p', 'a')
+
+    assert FakeApp.last.chats == ['/nope hello']
+
+
+async def test_the_compact_command_summarises_the_conversation_without_a_model_turn(helper_env, monkeypatch):
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [_user(0, 'm1', 'first'), _assistant(1, 'a1', 'answer'), _user(2, 'm2', 'second'), _assistant(3, 'a2', 'reply')]
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('/compact', 'p', 'a')
+
+    app = FakeApp.last
+    assert app.chats == []
+    assert len(app.compactor.summaries) == 1
+    assert [message.content for message in app.session_mgr.sessions_map['s1'].history][-1] == 'a summary'
+    assert helper.persisted is True
+
+
+async def test_the_compact_command_skips_an_empty_conversation(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('/compact', 'p', 'a')
+
+    assert FakeApp.last.compactor.summaries == []
+    assert helper.persisted is True
+
+
+async def test_a_failed_compact_leaves_the_conversation_alone(helper_env, monkeypatch):
+    FakeCompactor.summary = None
+
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [_user(0, 'm1', 'first'), _assistant(1, 'a1', 'answer'), _user(2, 'm2', 'second')]
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('/compact', 'p', 'a')
+
+    assert len(FakeApp.last.compactor.summaries) == 1
+    assert [message.content for message in FakeApp.last.session_mgr.sessions_map['s1'].history] == ['first', 'answer', 'second']

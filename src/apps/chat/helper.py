@@ -1,12 +1,16 @@
 import asyncio
 import logging
+from pathlib import Path
 from time import monotonic
 
 from rqark_app.app import AgentApp, Session
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
+from rqark_app.compact import compact_messages
 from rqark_app.config.manager import _build_agent, _build_provider
 from rqark_app.session.manager import SessionManager
 from rqark_app.session.storage import CloudStorage
+from rqark_app.sop.expand import expand
+from rqark_app.sop.manager import SopManager
 from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, SOURCE_KEY
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
@@ -22,6 +26,7 @@ from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE
 logger = logging.getLogger(__name__)
 
 SOURCE = 'AGENT_CLOUD'
+COMPACT_COMMAND = '/compact'
 TOKEN_REFRESH_WAIT = 90.0
 TOKEN_REFRESH_POLL = 0.05
 
@@ -165,18 +170,46 @@ class ChatHelper:
             logger.error('chat refused for a missing session session=%s', self.session_id)
             raise DataCloudError(404, 'SESSION_NOT_FOUND', f'session not found: {self.session_id}')
         session = await app.session_mgr.get_or_create(self.session_id)
+        if content.strip() == COMPACT_COMMAND:
+            await self._compact(app, session)
+            self.persisted = True
+            return session
         needs_title = bool(content) and not session.title
         saved = len(session.history)
+        expanded = await self._expand_sop(content)
         logger.info('chat request session=%s provider=%s agent=%s context=%d', self.session_id, provider_name, agent_name, saved)
         try:
-            await app.chat(content, agent, session_id=self.session_id, extras=self.extras(agent_info.get('id')))
+            await app.chat(expanded, agent, session_id=self.session_id, extras=self.extras(agent_info.get('id')))
         except asyncio.CancelledError:
-            await self._save_partial(app, session, saved, content, stream.text)
+            await self._save_partial(app, session, saved, expanded, stream.text)
             raise
         self.persisted = True
         if needs_title:
             await app.chat_helper.gen_title(session.uuid, content)
         return session
+
+    async def _expand_sop(self, content: str) -> str:
+        """Rewrite a '/slug args' turn with the SOP body; the cloud is the only source here."""
+        sops = await SopManager(Path.home() / '.rqark', self.client).list()
+        expanded = expand(content, sops)
+        if expanded is None:
+            return content
+        logger.info('sop expanded session=%s slug=%s', self.session_id, expanded[1])
+        return expanded[0]
+
+    async def _compact(self, app: AgentApp, session: Session) -> None:
+        """Replace the conversation behind the next turn with a summary of it."""
+        messages = session.get_last_chunk_for_chat()
+        if not compact_messages(messages):
+            logger.info('compact skipped on a conversation too short session=%s', self.session_id)
+            return
+        summary = await app.compactor.get_summary(messages)
+        if summary is None:
+            logger.warning('compact failed session=%s', self.session_id)
+            return
+        session.history.append(summary)
+        await app.session_mgr.save(session.uuid)
+        logger.info('compact done session=%s', self.session_id)
 
     async def revert(self, message_id: str) -> Session | None:
         manager = SessionManager(CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
