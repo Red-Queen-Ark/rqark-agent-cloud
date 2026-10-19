@@ -178,14 +178,16 @@ class ChatHelper:
         saved = len(session.history)
         expanded = await self._expand_sop(content)
         logger.info('chat request session=%s provider=%s agent=%s context=%d', self.session_id, provider_name, agent_name, saved)
+        extras = self.extras(agent_info.get('id'))
         try:
-            await app.chat(expanded, agent, session_id=self.session_id, extras=self.extras(agent_info.get('id')))
+            await app.chat(expanded, agent, session_id=self.session_id, extras=extras)
         except asyncio.CancelledError:
             await self._save_partial(app, session, saved, expanded, stream.text)
             raise
         self.persisted = True
         if needs_title:
             await app.chat_helper.gen_title(session.uuid, content)
+        _record_turn(app, session, extras)
         return session
 
     async def _expand_sop(self, content: str) -> str:
@@ -230,6 +232,25 @@ class ChatHelper:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+
+_background_writes: set[asyncio.Task] = set()
+
+
+def _record_turn(app: AgentApp, session: Session, extras: dict[str, object] | None) -> None:
+    """Record the finished turn without making the answer wait for it.
+
+    The write is its own task: it costs up to a model call and a few cloud
+    requests, and the answer has already been streamed. The app logs a failure;
+    nothing here can reach the socket.
+    """
+    try:
+        task = asyncio.create_task(app.write_turn_memory(session_id=session.uuid, source=SOURCE, session=session, extras=extras))
+    except RuntimeError:
+        logger.warning('no running loop, the turn was not recorded session=%s', session.uuid)
+        return
+    _background_writes.add(task)
+    task.add_done_callback(_background_writes.discard)
 
 
 class RefreshingStorage(CloudStorage):

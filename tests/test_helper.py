@@ -34,7 +34,7 @@ class FakeClient:
 
     async def list_agents(self):
         self.calls.append('list_agents')
-        return [{'name': 'a'}]
+        return [{'name': 'a', 'id': 'agent-1'}]
 
     async def list_providers(self):
         self.calls.append('list_providers')
@@ -140,6 +140,10 @@ class FakeApp:
         self.compactor = FakeCompactor()
         self.stream = event_module.RoomStream()
         self.chats: list[str] = []
+        self.turn_writes: list[dict] = []
+
+    async def write_turn_memory(self, *, session_id, source, session, extras=None, allow_state_update=True):
+        self.turn_writes.append({'session_id': session_id, 'source': source, 'session': session, 'extras': extras, 'allow_state_update': allow_state_update})
 
     async def chat(self, content, agent, session_id=None, extras=None):
         self.chats.append(content)
@@ -180,6 +184,51 @@ async def test_successful_chat_is_persisted(helper_env):
     assert helper.persisted is True
     assert FakeApp.last.session_mgr.saved == ['s1']
     assert FakeApp.last.chat_helper.titles == [('s1', 'hi')]
+
+
+async def test_a_finished_turn_is_recorded_in_the_background(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    await helper.chat('hi', 'p', 'a')
+    await asyncio.sleep(0)
+
+    writes = FakeApp.last.turn_writes
+    assert len(writes) == 1
+    assert writes[0]['session_id'] == 's1'
+    assert writes[0]['source'] == 'AGENT_CLOUD'
+    assert writes[0]['allow_state_update'] is True
+    assert set(writes[0]['extras']) == {'data_cloud', 'agent_id', 'source'}
+
+
+async def test_a_slow_writer_does_not_delay_the_answer(helper_env, monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_write(self, **kwargs):
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(FakeApp, 'write_turn_memory', slow_write)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    await asyncio.wait_for(helper.chat('hi', 'p', 'a'), 5)
+    assert not started.is_set()
+    await asyncio.sleep(0)
+    assert started.is_set()
+    release.set()
+    await asyncio.sleep(0)
+
+
+async def test_a_cancelled_turn_is_not_recorded(helper_env):
+    async def behavior(app):
+        raise asyncio.CancelledError()
+
+    FakeApp.behavior = behavior
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(asyncio.CancelledError):
+        await helper.chat('hi', 'p', 'a')
+    await asyncio.sleep(0)
+
+    assert FakeApp.last.turn_writes == []
 
 
 async def test_cancelled_chat_saves_partial_content_and_is_persisted(helper_env):
