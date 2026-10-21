@@ -178,6 +178,21 @@ def helper_env(monkeypatch):
     FakeApp.fail_save = False
 
 
+async def test_a_refused_token_waits_for_a_fresh_one(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    assert helper.client.on_unauthorized == helper._wait_for_fresh_token
+
+
+async def test_a_refresh_that_never_arrives_is_reported(helper_env, monkeypatch):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    monkeypatch.setattr(helper_module, 'TOKEN_REFRESH_WAIT', 0.05)
+
+    with pytest.raises(DataCloudError) as raised:
+        await helper._wait_for_fresh_token()
+
+    assert raised.value.status_code == 401
+
+
 async def test_successful_chat_is_persisted(helper_env):
     helper = helper_module.ChatHelper('s1', 't', 'u1')
     await helper.chat('hi', 'p', 'a')
