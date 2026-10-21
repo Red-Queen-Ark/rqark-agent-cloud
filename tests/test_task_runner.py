@@ -314,6 +314,7 @@ async def test_the_runner_builds_its_client_from_the_run_token(monkeypatch):
     assert SpyDataCloudClient.instances[0].calls == []
     assert storage.source == 'TASK'
     assert app.provider_mgr.provider.name == 'openai'
+    assert app.cloud_client is None
 
 
 async def test_the_sandbox_is_named_after_the_claiming_user(monkeypatch):

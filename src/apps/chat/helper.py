@@ -86,9 +86,10 @@ class ChatHelper:
         self.user_id = user_id
         self.room = room_key(user_id, session_id)
         self.workspace = Workspace(user_id, image=SANDBOX_IMAGE)
-        self.client = _build_client(token)
-        self.persisted = False
         self._token_generation = 0
+        self.client = _build_client(token)
+        self.client.on_unauthorized = self._wait_for_fresh_token
+        self.persisted = False
 
     @property
     def token_generation(self) -> int:
@@ -110,6 +111,11 @@ class ChatHelper:
                 return False
             await asyncio.sleep(TOKEN_REFRESH_POLL)
         return True
+
+    async def _wait_for_fresh_token(self) -> None:
+        generation = self._token_generation
+        if not await self.wait_for_token(generation, TOKEN_REFRESH_WAIT):
+            raise DataCloudError(401, 'UNAUTHORIZED', 'the data cloud token expired and no fresh one arrived')
 
     def storage(self) -> CloudStorage:
         return RefreshingStorage(self, source=SOURCE, list_source=SOURCE)
