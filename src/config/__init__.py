@@ -28,6 +28,10 @@ REDIS_URL = os.getenv('REDIS_URL') or f'redis://{REDIS_SERVER}:{REDIS_PORT}/0'
 DATA_CLOUD_URL = os.getenv('DATA_CLOUD_URL', 'http://localhost:7302')
 DATA_CLOUD_TIMEOUT = float(os.getenv('DATA_CLOUD_TIMEOUT', '30'))
 
+# Chat
+CHAT_IDLE_TIMEOUT = float(os.getenv('CHAT_IDLE_TIMEOUT', '900'))
+CHAT_IDLE_CHECK = float(os.getenv('CHAT_IDLE_CHECK', '5'))
+
 # Tasks
 INTERNAL_TOKEN = os.getenv('INTERNAL_TOKEN', '0a3be1ef5e090053bf78701be8c0fefdc955e5e878d26eed3ed1e26a0f5e9080')
 TASK_RUN_TIMEOUT = float(os.getenv('TASK_RUN_TIMEOUT', '600'))

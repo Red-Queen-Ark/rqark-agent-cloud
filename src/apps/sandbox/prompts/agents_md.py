@@ -15,7 +15,7 @@ class AgentsMdPrompt(BasePrompt):
 
     async def get_messages(self, ctx: PromptContext | None = None) -> str | None:
         path = f'{self.workspace.WORKDIR}/{AGENTS_MD}'
-        result = self.workspace.run_shell(f'cat -- {shlex.quote(path)}')
+        result = await self.workspace.shell(f'cat -- {shlex.quote(path)}')
         if result.exit_code != 0:
             return None
         return f'## Project Instructions (AGENTS.md)\n\n{result.stdout.strip()}'

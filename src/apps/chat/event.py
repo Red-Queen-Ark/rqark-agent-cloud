@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass, field
+from time import monotonic
 
 from rqark_app.app import AgentApp, Message
 from rqark_app.types.event import ProviderSwitch
@@ -25,10 +26,14 @@ def _is_subagent(ev: AgentPayload) -> bool:
 @dataclass
 class RoomStream:
     content: list[str] = field(default_factory=list)
+    last_activity: float = field(default_factory=monotonic)
 
     @property
     def text(self) -> str:
         return ''.join(self.content)
+
+    def touch(self) -> None:
+        self.last_activity = monotonic()
 
 
 def agent_payload_to_send_json(agent_payload: AgentPayload):
@@ -59,12 +64,14 @@ async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
 
     @app.on_think()
     async def think(ev: AgentPayload[Chunk]) -> None:
+        stream.touch()
         if _is_subagent(ev):
             return
         await _emit(room, ev)
 
     @app.on_content()
     async def content(ev: AgentPayload[Chunk]) -> None:
+        stream.touch()
         if _is_subagent(ev):
             return
         stream.content.append(str(ev.payload.content))
@@ -72,6 +79,7 @@ async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
 
     @app.on_tool_calls()
     async def tool_calls(ev: AgentPayload[Chunk]) -> None:
+        stream.touch()
         if _is_subagent(ev):
             return
         logger.info('tool calls room=%s agent=%s', room, ev.agent_id)
@@ -79,6 +87,7 @@ async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
 
     @app.on_tool_result()
     async def tool_result(ev: AgentPayload[ToolMessage]) -> None:
+        stream.touch()
         if _is_subagent(ev):
             return
         if str(ev.payload.content).startswith('Error'):
@@ -87,6 +96,7 @@ async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
 
     @app.on_error()
     async def error(ev: AgentPayload[Chunk]) -> None:
+        stream.touch()
         if _is_subagent(ev):
             return
         logger.error('agent error room=%s agent=%s content=%s', room, ev.agent_id, _clip(ev.payload.content))
@@ -98,12 +108,14 @@ async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
 
     @app.on_message()
     async def message(ev: AgentPayload[Message]) -> None:
+        stream.touch()
         if _is_subagent(ev) or isinstance(ev.payload, ToolMessage):
             return
         await _emit(room, ev)
 
     @app.on_plan()
     async def plan(ev: AgentPayload[list[PlanItem]]) -> None:
+        stream.touch()
         if _is_subagent(ev) or ':' not in ev.agent_id:
             return
         await _emit(room, ev)
