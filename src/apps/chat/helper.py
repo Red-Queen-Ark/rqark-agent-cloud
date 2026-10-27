@@ -17,11 +17,11 @@ from rqark_app.types.session import message_from_dict, parse_dt
 from rqark_core.types.chat import AssistantMessage, UserMessage
 from rqark_core.types.tool import PlanItem
 
-from src.apps.chat.event import connect_agent_event_to_room
+from src.apps.chat.event import RoomStream, connect_agent_event_to_room
 from src.apps.chat.scope import room_key
 from src.apps.sandbox import swap_agent
 from src.apps.sandbox.workspace import Workspace
-from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE
+from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,17 @@ SOURCE = 'AGENT_CLOUD'
 COMPACT_COMMAND = '/compact'
 TOKEN_REFRESH_WAIT = 90.0
 TOKEN_REFRESH_POLL = 0.05
+
+
+async def _watch_progress(stream: RoomStream, idle: asyncio.Timeout) -> None:
+    """Extend the deadline only while the turn is really moving; a silent retry loop still trips it."""
+    loop = asyncio.get_running_loop()
+    seen = stream.last_activity
+    while True:
+        await asyncio.sleep(CHAT_IDLE_CHECK)
+        if stream.last_activity != seen:
+            seen = stream.last_activity
+            idle.reschedule(loop.time() + CHAT_IDLE_TIMEOUT)
 
 
 def _build_client(token: str | None) -> RQArkDataCloudClient:
@@ -186,7 +197,17 @@ class ChatHelper:
         logger.info('chat request session=%s provider=%s agent=%s context=%d', self.session_id, provider_name, agent_name, saved)
         extras = self.extras(agent_info.get('id'))
         try:
-            await app.chat(expanded, agent, session_id=self.session_id, extras=extras)
+            async with asyncio.timeout(CHAT_IDLE_TIMEOUT) as idle:
+                watchdog = asyncio.create_task(_watch_progress(stream, idle))
+                try:
+                    await app.chat(expanded, agent, session_id=self.session_id, extras=extras)
+                finally:
+                    watchdog.cancel()
+                    await asyncio.gather(watchdog, return_exceptions=True)
+        except TimeoutError as error:
+            logger.error('chat stalled session=%s idle=%.0fs', self.session_id, CHAT_IDLE_TIMEOUT)
+            await self._save_partial(app, session, saved, expanded, stream.text)
+            raise RuntimeError('chat stalled: no progress') from error
         except asyncio.CancelledError:
             await self._save_partial(app, session, saved, expanded, stream.text)
             raise
