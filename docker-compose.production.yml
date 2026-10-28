@@ -20,13 +20,31 @@ services:
       - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
       - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
       - WORKSPACE_SHELL_MAX_BYTES=${WORKSPACE_SHELL_MAX_BYTES:-8388608}
+      - ASR_ENGINE=${ASR_ENGINE:-}
+      - ASR_MODEL=${ASR_MODEL:-}
+      - ASR_MODEL_DIR=/models/whisper
+      - ASR_LANGUAGE=${ASR_LANGUAGE:-Cantonese}
+      - ASR_MAX_BYTES=${ASR_MAX_BYTES:-26214400}
+      - ASR_MAX_SECONDS=${ASR_MAX_SECONDS:-60}
+      - ASR_TIMEOUT=${ASR_TIMEOUT:-60}
+      - ASR_QUEUE_TIMEOUT=${ASR_QUEUE_TIMEOUT:-30}
+      - ASR_CONCURRENCY=${ASR_CONCURRENCY:-1}
+      - ASR_OPENCC=${ASR_OPENCC:-true}
+      - ASR_OPENCC_CONFIG=${ASR_OPENCC_CONFIG:-s2hk}
+      - HF_HOME=/models/hf
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - asr-models:/models
+    mem_limit: ${ASR_MEM_LIMIT:-3g}
     container_name: ${PROJECT_NAME}-server
     networks:
       - rqark-project
     stop_grace_period: 90s
     restart: unless-stopped
+
+volumes:
+  asr-models:
+    name: ${PROJECT_NAME}-asr-models
 
 networks:
   rqark-project:

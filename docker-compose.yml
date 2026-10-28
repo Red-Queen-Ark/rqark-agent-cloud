@@ -8,6 +8,7 @@ services:
       - 8000:8000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - asr-models:/models
     env_file:
       - ./.env
     environment:
@@ -15,5 +16,10 @@ services:
       - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
       - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
       - WORKSPACE_SHELL_MAX_BYTES=${WORKSPACE_SHELL_MAX_BYTES:-8388608}
+      - ASR_MODEL_DIR=/models/whisper
+      - HF_HOME=/models/hf
     stop_grace_period: 90s
     restart: unless-stopped
+
+volumes:
+  asr-models:
