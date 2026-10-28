@@ -91,6 +91,7 @@ async def voice_websocket(websocket: WebSocket):
                             segmenter.reset()
                         logger.info('voice wake detected user=%s score=%.3f', user_id, score or 0.0)
                         await websocket.send_json(wake_event(score or 0.0))
+                        continue
                 if segmenter is not None:
                     for segment in segmenter.push(audio):
                         utterances += 1
