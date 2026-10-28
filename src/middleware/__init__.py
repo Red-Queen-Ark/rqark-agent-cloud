@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.apps.asr.errors import AsrError
 from src.apps.sandbox.workspace import (
     ConflictError,
     FileMissingError,
@@ -40,6 +41,11 @@ def _auth_error_handler(_: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
 
 
+def _asr_error_handler(_: Request, error: Exception) -> JSONResponse:
+    assert isinstance(error, AsrError)
+    return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
+
+
 def _workspace_error_handler(_: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, WorkspaceError)
     status, code = next(((status, code) for kind, (status, code) in _STATUS.items() if isinstance(error, kind)), (500, 'SANDBOX_ERROR'))
@@ -54,5 +60,6 @@ def _validation_error_handler(_: Request, error: Exception) -> JSONResponse:
 
 def setup_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AuthError, _auth_error_handler)
+    app.add_exception_handler(AsrError, _asr_error_handler)
     app.add_exception_handler(WorkspaceError, _workspace_error_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
