@@ -62,6 +62,20 @@ class FakeWakeModel:
         self.resets += 1
 
 
+class FakePreprocessor:
+    def __init__(self):
+        from collections import deque
+
+        self.raw_data_buffer = deque(maxlen=16000 * 10)
+        self.raw_data_buffer.extend([1, 2, 3])
+        self.melspectrogram_buffer = np.zeros((76, 32))
+        self.accumulated_samples = 99
+        self.feature_buffer = np.full((8, 96), 7.0)
+
+    def dirty(self):
+        return bool(self.accumulated_samples or self.raw_data_buffer or self.melspectrogram_buffer.sum() != 76 * 32)
+
+
 class FakeVadModel:
     def __init__(self, voiced_frames):
         self.voiced_frames = voiced_frames
@@ -86,9 +100,15 @@ def make_env(monkeypatch, user: dict | None = {'id': 'u1'}, segmenter=None, dete
     async def transcribe(samples):
         return transcript
 
+    async def build_detector():
+        return detector, None
+
+    async def build_segmenter():
+        return segmenter, None
+
     monkeypatch.setattr(service_module, 'authenticate', authenticate)
-    monkeypatch.setattr(service_module.wake, 'for_connection', lambda: detector)
-    monkeypatch.setattr(service_module, 'build_segmenter', lambda: segmenter)
+    monkeypatch.setattr(service_module, '_build_detector', build_detector)
+    monkeypatch.setattr(service_module, '_build_segmenter', build_segmenter)
     monkeypatch.setattr(service_module.asr_engine, 'transcribe', transcribe)
 
 
@@ -105,6 +125,8 @@ def run_sync(actions, token='t'):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     registry._sockets.clear()
+    registry._slots.clear()
+    monkeypatch.setattr(registry, 'use_redis', False)
     make_env(monkeypatch)
 
 
@@ -161,9 +183,21 @@ def test_the_wake_score_is_a_plain_float():
 
 def test_firing_resets_the_wake_stream():
     detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
+    before = detector.model.resets
 
     assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).woke is True
-    assert detector.model.resets == 1
+    assert detector.model.resets == before + 1
+
+
+def test_firing_clears_the_preprocessor_and_not_only_the_prediction_buffer():
+    model = FakeWakeModel([0.9])
+    model.preprocessor = FakePreprocessor()
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: model)
+    setattr(model, wake.BLANK_ATTRIBUTE, np.ones((76, 32)))
+
+    detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))
+
+    assert model.preprocessor.dirty() is False
 
 
 def test_the_audio_after_the_wake_word_is_handed_back():
@@ -227,12 +261,7 @@ def test_the_firing_model_is_the_one_that_is_named():
 
 
 def test_a_cooldown_only_silences_the_model_that_fired():
-    detector = wake.Detector(
-        paths=['wednesday.onnx', 'diana.onnx'],
-        threshold=0.5,
-        cooldown=1.0,
-        load=lambda paths: MultiWakeModel([{'wednesday': 0.9, 'diana': 0.0}, {'wednesday': 0.9, 'diana': 0.9}]),
-    )
+    detector = wake.Detector(paths=['wednesday.onnx', 'diana.onnx'], threshold=0.5, cooldown=1.0, load=lambda paths: MultiWakeModel([{'wednesday': 0.9, 'diana': 0.0}, {'wednesday': 0.9, 'diana': 0.9}]))
 
     assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).name == 'wednesday'
 
@@ -254,10 +283,11 @@ def test_a_bundled_name_resolves_without_a_path(monkeypatch):
     assert wake.models() == [str(wake.bundled('wednesday')), str(wake.bundled('diana'))]
 
 
-def test_an_unknown_name_is_left_alone(monkeypatch):
+def test_an_unknown_name_is_refused_with_the_alternatives(monkeypatch):
     monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', 'nothere')
 
-    assert wake.models() == ['nothere']
+    with pytest.raises(wake.WakeUnavailableError, match='unknown wake word'):
+        wake.models()
 
 
 def test_each_model_configuration_is_pooled_on_its_own(monkeypatch):
@@ -272,7 +302,7 @@ def test_each_model_configuration_is_pooled_on_its_own(monkeypatch):
 
 def test_the_ready_frame_lists_the_models(monkeypatch):
     detector = wake.Detector(paths=['wednesday.onnx', 'diana.onnx'], threshold=0.5, load=lambda paths: MultiWakeModel([]))
-    make_env(monkeypatch, detector=detector)
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0))
 
     conn = run_sync([])
 
@@ -292,14 +322,15 @@ def test_no_wake_detector_without_any_model(monkeypatch):
     assert wake.for_connection() is None
 
 
-def test_a_missing_wakeword_package_leaves_the_stage_off(monkeypatch):
+def test_a_configured_model_that_will_not_load_stays_loud(monkeypatch):
     def boom(paths):
         raise wake.WakeUnavailableError('not installed')
 
     monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', '/tmp/wednesday.onnx')
     monkeypatch.setattr(wake, '_load', boom)
 
-    assert wake.for_connection() is None
+    with pytest.raises(wake.WakeUnavailableError):
+        wake.for_connection()
 
 
 def test_the_segmenter_keeps_the_frames_before_the_first_voiced_one():
@@ -472,7 +503,7 @@ async def test_disconnect_ends_the_loop_quietly():
 
 
 def test_the_registry_refuses_a_second_socket_for_the_same_user():
-    local = Registry(max_connections=4, max_per_user=1)
+    local = Registry(max_connections=4, max_per_user=1, use_redis=False)
     local.add('u1', object())
 
     assert local.reason_to_refuse('u1') is not None
@@ -480,14 +511,14 @@ def test_the_registry_refuses_a_second_socket_for_the_same_user():
 
 
 def test_the_registry_refuses_past_the_connection_cap():
-    local = Registry(max_connections=1, max_per_user=1)
+    local = Registry(max_connections=1, max_per_user=1, use_redis=False)
     local.add('u1', object())
 
     assert local.reason_to_refuse('u2') is not None
 
 
 def test_the_registry_forgets_a_user_once_the_last_socket_leaves():
-    local = Registry(max_connections=4, max_per_user=1)
+    local = Registry(max_connections=4, max_per_user=1, use_redis=False)
     socket = object()
     local.add('u1', socket)
     local.remove('u1', socket)
@@ -497,7 +528,7 @@ def test_the_registry_forgets_a_user_once_the_last_socket_leaves():
 
 
 async def test_a_second_connection_for_one_user_is_closed_4429():
-    registry._sockets['u1'] = {object()}
+    registry._sockets['u1'] = {'other'}
 
     conn = await run([])
 
@@ -526,3 +557,170 @@ async def test_an_idle_socket_is_closed(monkeypatch):
 
     assert conn.sent[-1]['error']['code'] == 'VOICE_IDLE'
     assert conn.close_code == 4408
+
+
+def test_a_stray_half_sample_is_carried_into_the_next_frame():
+    from src.apps.voice.session import PcmStream
+
+    stream = PcmStream()
+    first = stream.feed(b'\x01\x02\x03')
+    second = stream.feed(b'\x04\x05\x06')
+
+    assert first.tolist() == [0x0201]
+    assert second.tolist() == [0x0403, 0x0605]
+
+
+def test_the_pre_roll_keeps_the_audio_before_the_hit():
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.0, 0.9]))
+
+    detection = detector.push(np.zeros(wake.FRAME_SIZE * 2, dtype=np.int16))
+
+    assert detection.woke is True
+    assert detection.preroll.size == wake.FRAME_SIZE * 2
+
+
+def test_the_pre_roll_is_bounded():
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, preroll_ms=160, load=lambda paths: FakeWakeModel([0.0] * 40 + [0.9]))
+
+    detection = detector.push(np.zeros(wake.FRAME_SIZE * 41, dtype=np.int16))
+
+    assert detection.preroll.size <= wake.FRAME_SIZE * 2
+
+
+async def test_the_wake_word_audio_is_not_dropped_from_the_utterance(monkeypatch):
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=30))
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE), pcm(vad.FRAME_SIZE * 2)])
+
+    final = [event for event in conn.sent if event['type'] == 'final']
+
+    assert final
+    assert final[0]['duration_ms'] > 60
+
+
+def test_a_primed_utterance_survives_the_voiced_frame_guard():
+    segmenter = fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=90)
+
+    segmenter.prime(np.zeros(vad.FRAME_SIZE * 2, dtype=np.int16))
+    await_speech = segmenter.push(np.zeros(vad.FRAME_SIZE * 4, dtype=np.int16))
+
+    assert await_speech
+    assert await_speech[0].samples.size >= vad.FRAME_SIZE * 2
+
+
+def test_a_primed_utterance_is_not_speaking_until_a_voiced_frame_lands():
+    segmenter = fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=30)
+
+    segmenter.prime(np.zeros(vad.FRAME_SIZE, dtype=np.int16))
+    assert segmenter.speaking is False
+
+    segmenter.push(np.zeros(vad.FRAME_SIZE * 4, dtype=np.int16))
+    assert segmenter.speaking is False
+
+
+def test_the_tail_survives_an_utterance_boundary():
+    segmenter = fake_segmenter(voiced_frames=3, silence_ms=60, min_ms=30)
+    segmenter.push(np.zeros(vad.FRAME_SIZE * 6, dtype=np.int16))
+    segmenter.push(np.zeros(vad.FRAME_SIZE + 7, dtype=np.int16))
+
+    assert segmenter._tail.size == 7
+
+
+@pytest.mark.parametrize('frame', ['[]', 'null', '5', '"start"'])
+async def test_a_json_frame_that_is_not_an_object_is_reported(frame):
+    conn = await run([frame, '{"type":"start"}'])
+
+    assert conn.sent[1]['error']['code'] == 'BAD_FRAME'
+    assert conn.sent[2] == {'type': 'started'}
+    assert conn.close_code is None
+
+
+async def test_start_also_accepts_kind():
+    conn = await run(['{"kind":"start"}'])
+
+    assert conn.sent[1] == {'type': 'started'}
+
+
+async def test_an_unexpected_transcription_error_keeps_the_socket_open(monkeypatch):
+    make_env(monkeypatch, segmenter=fake_segmenter(voiced_frames=3, silence_ms=1000, min_ms=30))
+
+    async def crash(samples):
+        raise RuntimeError('ctranslate2 exploded')
+
+    monkeypatch.setattr(service_module.asr_engine, 'transcribe', crash)
+    conn = await run([pcm(vad.FRAME_SIZE * 3), '{"type":"stop"}', '{"type":"start"}'])
+
+    assert conn.sent[-2]['error']['code'] == 'ASR_ERROR'
+    assert conn.sent[-1] == {'type': 'started'}
+    assert conn.close_code is None
+
+
+async def test_a_broken_wake_model_is_reported_and_the_socket_stays_up(monkeypatch):
+    async def broken():
+        return None, 'cannot load wake word model /tmp/x.onnx'
+
+    monkeypatch.setattr(service_module, '_build_detector', broken)
+    conn = await run([])
+
+    assert conn.sent[0]['type'] == 'ready'
+    assert conn.sent[1]['error']['code'] == 'WAKE_UNAVAILABLE'
+    assert conn.close_code is None
+
+
+async def test_an_oversized_frame_is_refused(monkeypatch):
+    monkeypatch.setattr(service_module, 'VOICE_MAX_FRAME_BYTES', 16)
+    conn = await run([pcm(64), '{"type":"start"}'])
+
+    assert conn.sent[1]['error']['code'] == 'FRAME_TOO_LARGE'
+    assert conn.sent[2] == {'type': 'started'}
+
+
+async def test_the_byte_budget_closes_the_socket(monkeypatch):
+    monkeypatch.setattr(service_module, 'VOICE_MAX_BYTES', 8)
+    conn = await run([pcm(64)])
+
+    assert conn.sent[1]['error']['code'] == 'AUDIO_TOO_LARGE'
+    assert conn.close_code == 1009
+
+
+async def test_a_released_lease_frees_the_slot_for_another_worker(monkeypatch, fake_redis):
+    async def fake():
+        return fake_redis
+
+    from src.apps.voice import registry as registry_module
+
+    monkeypatch.setattr(registry_module, 'get_redis', fake)
+    first = Registry(max_connections=1, max_per_user=1, use_redis=True)
+    second = Registry(max_connections=1, max_per_user=1, use_redis=True)
+
+    assert await first.acquire('u1', 'a') is None
+    assert await second.acquire('u2', 'b') is not None
+    await first.release('u1', 'a')
+
+    assert await second.acquire('u2', 'b') is None
+
+
+async def test_two_workers_share_the_per_user_cap(monkeypatch, fake_redis):
+    async def fake():
+        return fake_redis
+
+    from src.apps.voice import registry as registry_module
+
+    monkeypatch.setattr(registry_module, 'get_redis', fake)
+    first = Registry(max_connections=4, max_per_user=1, use_redis=True)
+    second = Registry(max_connections=4, max_per_user=1, use_redis=True)
+
+    assert await first.acquire('u1', 'a') is None
+    assert await second.acquire('u1', 'b') == 'this account already has a voice connection'
+
+
+async def test_a_broken_redis_degrades_instead_of_refusing(monkeypatch):
+    async def boom():
+        raise ConnectionError('redis is down')
+
+    from src.apps.voice import registry as registry_module
+
+    monkeypatch.setattr(registry_module, 'get_redis', boom)
+    local = Registry(max_connections=4, max_per_user=1, use_redis=True)
+
+    assert await local.acquire('u1', 'a') is None

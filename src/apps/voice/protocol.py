@@ -1,10 +1,29 @@
 from typing import Any
 
-from src.config import ASR_SAMPLE_RATE, VOICE_MAX_BYTES, VOICE_MAX_SECONDS
+from src.config import ASR_SAMPLE_RATE, VOICE_MAX_BYTES, VOICE_MAX_FRAME_BYTES, VOICE_MAX_SECONDS, VOICE_PREROLL_MS
 
 
-def ready_event(concurrency: int, wake_word: bool, vad: bool, wake_models: list[str] | None = None) -> dict[str, Any]:
-    return {'type': 'ready', 'sample_rate': ASR_SAMPLE_RATE, 'format': 'pcm_s16le', 'channels': 1, 'max_seconds': VOICE_MAX_SECONDS, 'max_bytes': VOICE_MAX_BYTES, 'concurrency': concurrency, 'wake_word': wake_word, 'wake_models': list(wake_models or []), 'vad': vad}
+def ready_event(concurrency: int, wake_word: bool, vad: bool, wake_models: list[str] | None = None, preroll_ms: int = VOICE_PREROLL_MS) -> dict[str, Any]:
+    """Announce the wire format up front.
+
+    `wake_models` lists the models the server will listen for. It is empty when the client
+    has to cut turns itself, and a client must not read an empty list as "no wake word
+    support" without also sending `{"type": "mode", "value": "wake"}` first.
+    """
+    return {
+        'type': 'ready',
+        'sample_rate': ASR_SAMPLE_RATE,
+        'format': 'pcm_s16le',
+        'channels': 1,
+        'max_seconds': VOICE_MAX_SECONDS,
+        'max_bytes': VOICE_MAX_BYTES,
+        'max_frame_bytes': VOICE_MAX_FRAME_BYTES,
+        'preroll_ms': preroll_ms,
+        'concurrency': concurrency,
+        'wake_word': wake_word,
+        'wake_models': list(wake_models or []),
+        'vad': vad,
+    }
 
 
 def started_event() -> dict[str, str]:
