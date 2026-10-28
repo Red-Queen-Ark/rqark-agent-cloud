@@ -14,7 +14,7 @@ class HealthModel(BaseModel):
     users: int
     max_connections: int
     max_per_user: int
-    wake_word: str | None
+    wake_words: list[str]
     wake_threshold: float
     vad: bool
     vad_threshold: float
@@ -34,7 +34,7 @@ async def health():
         users=state['users'],
         max_connections=state['max_connections'],
         max_per_user=state['max_per_user'],
-        wake_word=wake.model_name() or None,
+        wake_words=wake.model_names(),
         wake_threshold=VOICE_WAKE_THRESHOLD,
         vad=vad.available(),
         vad_threshold=VOICE_VAD_THRESHOLD,

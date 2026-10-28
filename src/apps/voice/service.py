@@ -12,7 +12,7 @@ from src.apps.voice import vad, wake
 from src.apps.voice.protocol import error_event, final_event, ready_event, started_event, wake_event
 from src.apps.voice.registry import registry
 from src.apps.voice.session import duration_ms, int16_from_bytes
-from src.config import ASR_CONCURRENCY, VOICE_IDLE_TIMEOUT
+from src.config import ASR_CONCURRENCY, VOICE_IDLE_TIMEOUT, VOICE_WAKE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,11 @@ async def _transcribe(samples, websocket: WebSocket, user_id: str, truncated: bo
 async def voice_websocket(websocket: WebSocket):
     """Audio ingress and turn boundary for the voice pipeline.
 
-    The browser streams PCM as binary frames. A wake word model scores the stream as it
-    arrives, then the VAD marks where an utterance starts and ends; each utterance is
-    transcribed and answered with a final event. A client that would rather cut the turn
-    itself sends `start` and `stop` control frames instead.
+    The browser streams PCM as binary frames. In wake mode (`{"type": "mode", "value":
+    "wake"}`) the audio reaches the wake model and nothing else until the word is heard, so
+    an idle always-on socket costs one small model and no transcription. After a wake the
+    VAD marks where the utterance ends, and every utterance is answered with a final event.
+    A client that would rather cut the turn itself sends `start` and `stop` control frames.
     """
     await websocket.accept()
     token = websocket.query_params.get('token')
@@ -64,11 +65,28 @@ async def voice_websocket(websocket: WebSocket):
     registry.add(user_id, websocket)
     received = 0
     utterances = 0
+    wake_mode = False
+    gated = False
+    since_wake = 0.0
+    detector: wake.Detector | None = None
+    segmenter: vad.Segmenter | None = None
+
+    def rearm() -> bool:
+        """Look for the wake word again, if this socket is an always-on one."""
+        nonlocal since_wake
+        if detector is None or not wake_mode:
+            return False
+        detector.reset()
+        if segmenter is not None:
+            segmenter.reset()
+        since_wake = 0.0
+        return True
+
     try:
         detector = await asyncio.to_thread(wake.for_connection)
         segmenter = await asyncio.to_thread(build_segmenter)
-        await websocket.send_json(ready_event(ASR_CONCURRENCY, detector is not None, segmenter is not None))
-        logger.info('voice connected user=%s wake=%s vad=%s', user_id, wake.model_name() or 'off', segmenter is not None)
+        await websocket.send_json(ready_event(ASR_CONCURRENCY, detector is not None, segmenter is not None, detector.names if detector else []))
+        logger.info('voice connected user=%s wake=%s vad=%s', user_id, ','.join(wake.model_names()) or 'off', segmenter is not None)
         while True:
             try:
                 message = await asyncio.wait_for(websocket.receive(), timeout=VOICE_IDLE_TIMEOUT)
@@ -84,18 +102,28 @@ async def voice_websocket(websocket: WebSocket):
             if chunk is not None:
                 received += len(chunk)
                 audio = int16_from_bytes(chunk)
-                if detector is not None:
-                    score = detector.push(audio)
-                    if detector.fired(score):
-                        if segmenter is not None:
-                            segmenter.reset()
-                        logger.info('voice wake detected user=%s score=%.3f', user_id, score or 0.0)
-                        await websocket.send_json(wake_event(score or 0.0))
+                if since_wake and time.monotonic() - since_wake > VOICE_WAKE_WINDOW and (segmenter is None or not segmenter.active):
+                    logger.info('voice wake went unanswered user=%s window=%s', user_id, VOICE_WAKE_WINDOW)
+                    await websocket.send_json(error_event('VOICE_WAKE_TIMEOUT', 'no speech followed the wake word'))
+                    gated = rearm()
+                if gated and detector is not None:
+                    detection = await asyncio.to_thread(detector.push, audio)
+                    if not detection.woke:
+                        continue
+                    gated = False
+                    since_wake = time.monotonic()
+                    logger.info('voice wake detected user=%s model=%s score=%.3f', user_id, detection.name or '?', detection.score or 0.0)
+                    if segmenter is not None:
+                        segmenter.reset()
+                    await websocket.send_json(wake_event(detection.score or 0.0, detection.name or ''))
+                    audio = detection.rest
+                    if audio.size == 0:
                         continue
                 if segmenter is not None:
-                    for segment in segmenter.push(audio):
+                    for segment in await asyncio.to_thread(segmenter.push, audio):
                         utterances += 1
                         await _transcribe(segment.samples, websocket, user_id, segment.truncated)
+                        gated = rearm()
                 continue
 
             text = message.get('text')
@@ -108,26 +136,37 @@ async def voice_websocket(websocket: WebSocket):
                 continue
 
             kind = control.get('type')
-            if kind == 'start':
+            if kind == 'mode':
+                wake_mode = control.get('value') == 'wake'
+                gated = rearm()
+            elif kind == 'start':
+                gated = rearm()
                 if segmenter is not None:
                     segmenter.reset()
                 await websocket.send_json(started_event())
             elif kind == 'cancel':
+                gated = rearm()
                 if segmenter is not None:
                     segmenter.reset()
             elif kind == 'stop':
                 segment = segmenter.flush() if segmenter is not None else None
                 if segment is None:
                     await websocket.send_json(error_event('AUDIO_EMPTY', 'no speech arrived before the utterance ended'))
+                    gated = rearm()
                     continue
                 utterances += 1
                 await _transcribe(segment.samples, websocket, user_id, segment.truncated)
+                gated = rearm()
             else:
                 await websocket.send_json(error_event('BAD_FRAME', f'unknown frame type: {kind!r}'))
     except WebSocketDisconnect:
         logger.info('voice disconnected user=%s utterances=%d bytes=%d', user_id, utterances, received)
     finally:
         registry.remove(user_id, websocket)
+        if detector is not None:
+            await asyncio.to_thread(detector.close)
+        if segmenter is not None:
+            await asyncio.to_thread(segmenter.close)
 
 
 def build_segmenter() -> vad.Segmenter | None:

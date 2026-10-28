@@ -64,7 +64,7 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 連上即刻收到：
 
 ```json
-{"type":"ready","sample_rate":16000,"format":"pcm_s16le","channels":1,"max_seconds":60,"max_bytes":26214400,"concurrency":1,"wake_word":false,"vad":true}
+{"type":"ready","sample_rate":16000,"format":"pcm_s16le","channels":1,"max_seconds":60,"max_bytes":26214400,"concurrency":1,"wake_word":false,"wake_models":[],"vad":true}
 ```
 
 ### 上行
@@ -72,6 +72,7 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 | 幀 | 內容 |
 | --- | --- |
 | binary | PCM int16 LE、單聲道、16kHz。任意長度，server 自己拼 frame |
+| `{"type":"mode","value":"wake"}` | 轉 always-on 模式：未聽到喚醒詞之前，音訊只餵 wake model，唔會 VAD、唔會轉錄 |
 | `{"type":"start"}` | 丟棄手上音訊，開新一句 |
 | `{"type":"cancel"}` | 丟棄手上音訊 |
 | `{"type":"stop"}` | 即刻收句，唔等 VAD |
@@ -82,7 +83,7 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 | --- | --- |
 | `ready` | 連上 |
 | `started` | 收到 `start` |
-| `wake` | 偵測到 wake word（`score`） |
+| `wake` | 偵測到 wake word（`score` + `name`，講邊個 model 叫醒） |
 | `final` | 一句轉好：`text` / `duration_ms` / `elapsed_ms` / `truncated` |
 | `error` | `code` + `message`，socket 通常仲開得 |
 
@@ -90,14 +91,16 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 
 ### 流程
 
-1. **Wake word**（內置 `src/apps/voice/models/wednesday.onnx`，openWakeWord ONNX；`VOICE_WAKE_MODEL` 填路徑可換模型）逐 80ms frame 打分，過 `VOICE_WAKE_THRESHOLD` 就送 `wake` 並清走緩衝，唔想將 wake word 本身送去轉錄
-2. **VAD**（Silero，openWakeWord 自帶 `silero_vad.onnx`）逐 30ms frame 判斷有冇人聲。講嘢之前嘅 250ms 放喺 ring buffer，一開口就連埋，唔會斬頭
-3. 靜 `VOICE_VAD_SILENCE_MS` 之後收句，短過 `VOICE_VAD_MIN_MS` 當雜音丟；長過 `VOICE_MAX_SECONDS` 就切開並標 `truncated`
-4. 收句交 `asr.engine.transcribe`（同 `/api/asr` 同一條路：併發 1、60s timeout、OpenCC `s2hk`）
+1. **Wake word**（內置 `src/apps/voice/models/wednesday.onnx`，openWakeWord ONNX）。`VOICE_WAKE_MODEL` 填內置名（`wednesday,diana`）或路徑，逗號分隔可以多個，一個 openWakeWord 實例會同時幫全部 model 打分，共用同一份 feature extractor，所以多一個詞成本好低。逐 80ms frame 打分。`mode` 係 `wake` 時，叫醒之前嘅音訊只入 wake model，VAD 同 ASR 完全唔行
+2. 任何一個 model 過 `VOICE_WAKE_THRESHOLD` 就送 `wake`（`name` 講邊個中）；同一 chunk 喚醒詞後面嘅音訊會交返落 VAD（唔會漏咗命令開頭），之後嗰個 model 喺 `VOICE_WAKE_COOLDOWN` 秒內唔再 fire，其他 model 照計
+3. 叫醒之後 `VOICE_WAKE_WINDOW` 秒內都冇人聲，就送 `VOICE_WAKE_TIMEOUT` 並回去等喚醒詞
+4. **VAD**（Silero，openWakeWord 自帶 `silero_vad.onnx`）逐 30ms frame 判斷有冇人聲。講嘢之前嘅 250ms 放喺 ring buffer，一開口就連埋，唔會斬頭
+5. 靜 `VOICE_VAD_SILENCE_MS` 之後收句，短過 `VOICE_VAD_MIN_MS` 當雜音丟；長過 `VOICE_MAX_SECONDS` 就切開並標 `truncated`
+6. 收句交 `asr.engine.transcribe`（同 `/api/asr` 同一條路：併發 1、60s timeout、OpenCC `s2hk`）
 
 喚醒詞模型跟住 package 一齊入 image（`.onnx` 831KB），唔使另外下載，亦唔會因為 `.env` 留空就關掉。
 
-兩個 stage 都係 lazy 載入，模型唔喺度就靜靜關掉嗰個 stage，`ready` 嘅 `wake_word` / `vad` 會講返。
+兩個 stage 都係 lazy 載入，推論（wake 15.6ms + VAD 3.0ms / 秒音訊）行 thread pool，唔阻 event loop。載好嘅模型會留喺 process 內重用，第二條連線唔使再等半秒 load model。模型唔喺度就靜靜關掉嗰個 stage，`ready` 嘅 `wake_word` / `vad` 會講返。
 
 ### 限制
 
@@ -108,7 +111,9 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 | 閒置 | `VOICE_IDLE_TIMEOUT` 秒冇 frame 就 `4408` | 300 |
 | 單句長度 | `VOICE_MAX_SECONDS` | 60 |
 | VAD | `VOICE_VAD_THRESHOLD` / `VOICE_VAD_SILENCE_MS` / `VOICE_VAD_LEAD_MS` / `VOICE_VAD_MIN_MS` | 0.5 / 1000 / 250 / 250 |
-| Wake word | `VOICE_WAKE_MODEL`（空 = 用內置 `wednesday`）/ `VOICE_WAKE_THRESHOLD` | 空 / 0.5 |
+| Wake word | `VOICE_WAKE_MODEL`（空 = 用內置 `wednesday`；可寫 `wednesday,diana` 或多個路徑）/ `VOICE_WAKE_THRESHOLD` | 空 / 0.5 |
+| 重複觸發 | `VOICE_WAKE_COOLDOWN` 秒內同一個 model 唔再 fire | 1.5 |
+| 叫醒後等人聲 | `VOICE_WAKE_WINDOW` 秒冇人聲就 `VOICE_WAKE_TIMEOUT` | 10 |
 
 幀率開支：16kHz int16 單聲道 = 32KB/s，比 Opus（4KB/s 以內）大一個數量級。Opus 要 server 邊收邊 decode（libav pipe），未做。
 

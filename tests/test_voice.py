@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,12 +50,13 @@ def pcm(samples: int) -> bytes:
 
 
 class FakeWakeModel:
-    def __init__(self, scores):
+    def __init__(self, scores, name='wednesday'):
         self.scores = list(scores)
+        self.name = name
         self.resets = 0
 
     def predict(self, frame, frame_size=None):
-        return {'wednesday': self.scores.pop(0) if self.scores else 0.0}
+        return {self.name: self.scores.pop(0) if self.scores else 0.0}
 
     def reset(self):
         self.resets += 1
@@ -96,6 +98,10 @@ async def run(actions, token='t'):
     return conn
 
 
+def run_sync(actions, token='t'):
+    return asyncio.run(run(actions, token))
+
+
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     registry._sockets.clear()
@@ -125,45 +131,158 @@ def test_duration_of_one_second():
 
 
 def test_a_short_chunk_is_carried_into_the_next_wake_frame():
-    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.0]))
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.0]))
     half = np.zeros(wake.FRAME_SIZE // 2, dtype=np.int16)
 
-    assert detector.push(half) is None
-    assert detector.push(half) == 0.0
+    assert detector.push(half).score is None
+    assert detector.push(half).score == 0.0
 
 
 def test_the_highest_wake_score_in_a_chunk_wins():
-    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.1, 0.9]))
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.1, 0.9]))
 
-    assert detector.push(np.zeros(wake.FRAME_SIZE * 2, dtype=np.int16)) == pytest.approx(0.9)
+    assert detector.push(np.zeros(wake.FRAME_SIZE * 2, dtype=np.int16)).score == pytest.approx(0.9)
 
 
 def test_a_wake_score_under_the_threshold_does_not_fire():
-    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.49]))
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.49]))
 
-    assert detector.fired(detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))) is False
+    assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).woke is False
 
 
 def test_the_wake_score_is_a_plain_float():
-    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([np.float32(0.87)]))
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([np.float32(0.87)]))
 
-    score = detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))
+    score = detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).score
 
     assert type(score) is float
     assert json.loads(json.dumps(wake_event(score)))['score'] == 0.87
 
 
 def test_firing_resets_the_wake_stream():
-    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.9]))
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
 
-    assert detector.fired(detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))) is True
+    assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).woke is True
     assert detector.model.resets == 1
+
+
+def test_the_audio_after_the_wake_word_is_handed_back():
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
+
+    detection = detector.push(np.zeros(wake.FRAME_SIZE * 3, dtype=np.int16))
+
+    assert detection.woke is True
+    assert detection.rest.size == wake.FRAME_SIZE * 2
+
+
+def test_a_second_wake_within_the_cooldown_is_ignored():
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, cooldown=0.08, load=lambda paths: FakeWakeModel([0.9] * 3))
+
+    assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).woke is True
+    assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).woke is False
+
+
+def test_the_wake_word_is_heard_again_once_the_cooldown_passes():
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, cooldown=0.08, load=lambda paths: FakeWakeModel([0.9] * 4))
+
+    detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))
+
+    assert detector.push(np.zeros(wake.FRAME_SIZE * 2, dtype=np.int16)).woke is True
+
+
+def test_a_loaded_model_is_handed_to_the_next_connection(monkeypatch):
+    monkeypatch.setattr(wake, '_spare', {})
+    monkeypatch.setattr(wake, '_load', lambda paths: FakeWakeModel([0.0]))
+    first = wake.Detector(paths=['wednesday.onnx'])
+    first.close()
+
+    assert wake.Detector(paths=['wednesday.onnx']).model is first.model
+
+
+class MultiWakeModel:
+    def __init__(self, scores):
+        self.scores = list(scores)
+        self.resets = 0
+
+    def predict(self, frame, frame_size=None):
+        return self.scores.pop(0) if self.scores else {}
+
+    def reset(self):
+        self.resets += 1
+
+
+def test_several_models_are_scored_on_the_same_frames():
+    detector = wake.Detector(paths=['wednesday.onnx', 'diana.onnx'], threshold=0.5, load=lambda paths: MultiWakeModel([{'wednesday': 0.1, 'diana': 0.8}]))
+
+    detection = detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))
+
+    assert detection.woke is True
+    assert detection.name == 'diana'
+
+
+def test_the_firing_model_is_the_one_that_is_named():
+    detector = wake.Detector(paths=['wednesday.onnx', 'diana.onnx'], threshold=0.5, load=lambda paths: MultiWakeModel([{'wednesday': 0.7, 'diana': 0.2}]))
+
+    assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).name == 'wednesday'
+
+
+def test_a_cooldown_only_silences_the_model_that_fired():
+    detector = wake.Detector(
+        paths=['wednesday.onnx', 'diana.onnx'],
+        threshold=0.5,
+        cooldown=1.0,
+        load=lambda paths: MultiWakeModel([{'wednesday': 0.9, 'diana': 0.0}, {'wednesday': 0.9, 'diana': 0.9}]),
+    )
+
+    assert detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16)).name == 'wednesday'
+
+    second = detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))
+
+    assert second.woke is True
+    assert second.name == 'diana'
+
+
+def test_a_comma_list_in_the_setting_loads_every_model(monkeypatch):
+    monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', '/models/a.onnx, /models/b.onnx')
+
+    assert wake.model_names() == ['a', 'b']
+
+
+def test_a_bundled_name_resolves_without_a_path(monkeypatch):
+    monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', 'wednesday, diana.onnx')
+
+    assert wake.models() == [str(wake.bundled('wednesday')), str(wake.bundled('diana'))]
+
+
+def test_an_unknown_name_is_left_alone(monkeypatch):
+    monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', 'nothere')
+
+    assert wake.models() == ['nothere']
+
+
+def test_each_model_configuration_is_pooled_on_its_own(monkeypatch):
+    monkeypatch.setattr(wake, '_spare', {})
+    monkeypatch.setattr(wake, '_load', lambda paths: MultiWakeModel([]))
+    both = wake.Detector(paths=['wednesday.onnx', 'diana.onnx'])
+    both.close()
+
+    assert wake.Detector(paths=['wednesday.onnx', 'diana.onnx']).model is both.model
+    assert wake.Detector(paths=['wednesday.onnx']).model is not both.model
+
+
+def test_the_ready_frame_lists_the_models(monkeypatch):
+    detector = wake.Detector(paths=['wednesday.onnx', 'diana.onnx'], threshold=0.5, load=lambda paths: MultiWakeModel([]))
+    make_env(monkeypatch, detector=detector)
+
+    conn = run_sync([])
+
+    assert conn.sent[0]['wake_models'] == ['wednesday', 'diana']
 
 
 def test_the_bundled_model_is_used_when_the_setting_is_empty(monkeypatch):
     monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', '')
 
-    assert wake.model_name() == 'wednesday'
+    assert wake.model_names() == ['wednesday']
 
 
 def test_no_wake_detector_without_any_model(monkeypatch):
@@ -174,7 +293,7 @@ def test_no_wake_detector_without_any_model(monkeypatch):
 
 
 def test_a_missing_wakeword_package_leaves_the_stage_off(monkeypatch):
-    def boom(model_path):
+    def boom(paths):
         raise wake.WakeUnavailableError('not installed')
 
     monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', '/tmp/wednesday.onnx')
@@ -248,12 +367,38 @@ async def test_a_voiced_utterance_comes_back_as_a_final_event(monkeypatch):
 
 
 async def test_a_wake_word_resets_the_utterance(monkeypatch):
-    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.9]))
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
     make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0))
-    conn = await run([pcm(wake.FRAME_SIZE)])
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE)])
 
     assert conn.sent[0]['wake_word'] is True
-    assert conn.sent[1] == {'type': 'wake', 'score': 0.9}
+    assert conn.sent[1] == {'type': 'wake', 'score': 0.9, 'name': 'wednesday'}
+
+
+async def test_speech_before_the_wake_word_never_reaches_the_transcriber(monkeypatch):
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.1] * 10))
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=3, silence_ms=60, min_ms=30))
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(vad.FRAME_SIZE * 6)])
+
+    assert conn.sent[1:] == []
+
+
+async def test_the_rest_of_the_chunk_after_the_wake_word_still_runs(monkeypatch):
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=3, silence_ms=60, min_ms=30))
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE + vad.FRAME_SIZE * 6)])
+
+    assert conn.sent[1] == {'type': 'wake', 'score': 0.9, 'name': 'wednesday'}
+    assert conn.sent[2]['type'] == 'final'
+
+
+async def test_a_wake_word_nobody_followed_up_puts_the_socket_back_to_armed(monkeypatch):
+    monkeypatch.setattr(service_module, 'VOICE_WAKE_WINDOW', 0.0)
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9] + [0.0] * 10))
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0))
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE), pcm(wake.FRAME_SIZE)])
+
+    assert [frame.get('error', {}).get('code') for frame in conn.sent] == [None, None, 'VOICE_WAKE_TIMEOUT']
 
 
 async def test_stop_without_speech_reports_an_empty_utterance(monkeypatch):

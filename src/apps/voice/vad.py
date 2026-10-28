@@ -1,12 +1,13 @@
 import importlib
 import importlib.util
+import threading
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 import numpy as np
 
-from src.config import ASR_SAMPLE_RATE, VOICE_MAX_SECONDS, VOICE_VAD_LEAD_MS, VOICE_VAD_MIN_MS, VOICE_VAD_SILENCE_MS, VOICE_VAD_THRESHOLD
+from src.config import ASR_SAMPLE_RATE, VOICE_MAX_CONNECTIONS, VOICE_MAX_SECONDS, VOICE_VAD_LEAD_MS, VOICE_VAD_MIN_MS, VOICE_VAD_SILENCE_MS, VOICE_VAD_THRESHOLD
 
 FRAME_SIZE = 480
 
@@ -44,6 +45,24 @@ def available() -> bool:
     return importlib.util.find_spec('openwakeword.vad') is not None
 
 
+_spare: list[VadModel] = []
+_spare_lock = threading.Lock()
+
+
+def _borrow() -> VadModel:
+    with _spare_lock:
+        if _spare:
+            return _spare.pop()
+    return _load()
+
+
+def _give_back(model: VadModel) -> None:
+    model.reset_states()
+    with _spare_lock:
+        if len(_spare) < VOICE_MAX_CONNECTIONS:
+            _spare.append(model)
+
+
 def _frames(count_ms: int) -> int:
     return max(0, round(count_ms * ASR_SAMPLE_RATE / 1000 / FRAME_SIZE))
 
@@ -62,9 +81,10 @@ class Segmenter:
         lead_ms: int = VOICE_VAD_LEAD_MS,
         min_ms: int = VOICE_VAD_MIN_MS,
         max_seconds: int = VOICE_MAX_SECONDS,
-        load: Any = _load,
+        load: Any = None,
     ):
-        self.model = load()
+        self._pooled = load is None
+        self.model = _borrow() if load is None else load()
         self.threshold = threshold
         self.silence_frames = max(1, _frames(silence_ms))
         self.min_frames = max(1, _frames(min_ms))
@@ -145,3 +165,7 @@ class Segmenter:
         self.ring.clear()
         self._tail = np.zeros(0, dtype=np.int16)
         self.model.reset_states()
+
+    def close(self) -> None:
+        if self._pooled:
+            _give_back(self.model)
