@@ -55,8 +55,8 @@ def error_event(message: str) -> dict:
 
 async def _emit(room: str, agent_payload: AgentPayload) -> None:
     data = agent_payload_to_send_json(agent_payload)
-    await record(room, data)
-    await publish(room, data)
+    # Recorded first so the seq is stamped before anything reaches a reader.
+    await publish(room, await record(room, data))
 
 
 async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:

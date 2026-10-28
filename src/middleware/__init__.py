@@ -41,16 +41,16 @@ def _auth_error_handler(_: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
 
 
+def _asr_error_handler(_: Request, error: Exception) -> JSONResponse:
+    assert isinstance(error, AsrError)
+    return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
+
+
 def _workspace_error_handler(_: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, WorkspaceError)
     status, code = next(((status, code) for kind, (status, code) in _STATUS.items() if isinstance(error, kind)), (500, 'SANDBOX_ERROR'))
     headers = {'Retry-After': '10'} if status == 503 else None
     return JSONResponse(status_code=status, content={'error': {'code': code, 'message': str(error) or code}}, headers=headers)
-
-
-def _asr_error_handler(_: Request, error: Exception) -> JSONResponse:
-    assert isinstance(error, AsrError)
-    return JSONResponse(status_code=error.status_code, content={'error': {'code': error.code, 'message': error.message}})
 
 
 def _validation_error_handler(_: Request, error: Exception) -> JSONResponse:

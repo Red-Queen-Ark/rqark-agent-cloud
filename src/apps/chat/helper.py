@@ -90,6 +90,11 @@ async def authenticate(token: str | None) -> dict | None:
         await client.aclose()
 
 
+def _ends_with_answer(history: list, assistant: str) -> bool:
+    last = history[-1] if history else None
+    return isinstance(last, AssistantMessage) and last.content == assistant
+
+
 class ChatHelper:
     def __init__(self, session_id: str, token: str | None, user_id: str):
         self.session_id = session_id
@@ -139,10 +144,16 @@ class ChatHelper:
     async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
         if len(session.history) <= saved:
             session.history.append(UserMessage(content))
-            if assistant:
-                session.history.append(AssistantMessage(assistant))
+        # The loop may already have saved a tool-call iteration of this turn, in
+        # which case the history grew past `saved` and the text the user watched
+        # was never written. Append it unless the turn already ends with it.
+        if assistant and not _ends_with_answer(session.history, assistant):
+            session.history.append(AssistantMessage(assistant))
         logger.warning('saving partial session=%s loaded=%d streamed=%d', self.session_id, saved, len(assistant))
-        await app.session_mgr.save(session.uuid)
+        # Shielded because this runs from the cancellation path: the write is
+        # the only copy of a turn the user already watched, so it has to be
+        # allowed to finish and report whether it did.
+        await asyncio.shield(app.session_mgr.save(session.uuid))
         self.persisted = True
 
     async def _load_session(self, manager: SessionManager) -> bool:
