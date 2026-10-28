@@ -410,4 +410,48 @@ async def test_replay_is_kept_when_chat_not_persisted(monkeypatch, room_env):
     runner.submit(ChatCommand('hi', 'p', 'a'))
     await wait_until(lambda: runner._chat is not None and runner._chat.done())
     assert FakeHelper.instances[0].persisted is False
-    assert await replay.read(room('s14')) == [{'n': 1}]
+    assert await replay.read(room('s14')) == [{'n': 1, 'seq': 1}]
+
+
+async def test_stop_clears_the_replay_of_a_persisted_turn(env, room_env, monkeypatch):
+    async def real_clear(session_id):
+        await replay.clear(session_id)
+
+    monkeypatch.setattr(runner_module, 'clear', real_clear)
+    runner = await acquire('s15', 't')
+
+    async def behavior(self, content, provider, agent):
+        await replay.record(room('s15'), {'n': 1})
+        self.persisted = True
+        await asyncio.sleep(3600)
+
+    FakeHelper.behavior = behavior
+    runner.submit(ChatCommand('hi', 'p', 'a'))
+    await wait_until(lambda: FakeHelper.instances[0].started.is_set())
+    runner.stop()
+    await wait_until(lambda: 'chat stopped' in error_messages(env))
+
+    # The stored session is the truth for a stopped turn; leaving the replay
+    # behind is what let a resyncing reader fold the same turn in twice.
+    assert await replay.read(room('s15')) == []
+
+
+async def test_stop_keeps_the_replay_when_the_turn_was_not_stored(env, room_env, monkeypatch):
+    async def real_clear(session_id):
+        await replay.clear(session_id)
+
+    monkeypatch.setattr(runner_module, 'clear', real_clear)
+    runner = await acquire('s16', 't')
+
+    async def behavior(self, content, provider, agent):
+        await replay.record(room('s16'), {'n': 1})
+        await asyncio.sleep(3600)
+
+    FakeHelper.behavior = behavior
+    runner.submit(ChatCommand('hi', 'p', 'a'))
+    await wait_until(lambda: FakeHelper.instances[0].started.is_set())
+    runner.stop()
+    await wait_until(lambda: 'chat stopped' in error_messages(env))
+
+    # Nothing stored this turn, so the replay is its only copy.
+    assert await replay.read(room('s16')) == [{'n': 1, 'seq': 1}]

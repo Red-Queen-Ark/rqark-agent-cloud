@@ -130,6 +130,14 @@ class SessionRunner:
             await chat
         except asyncio.CancelledError:
             pass
+        except Exception as error:
+            logger.error('cancelled chat raised room=%s error=%s', self.room, error)
+        # The turn is the stored session's business once it is stored; a turn the
+        # save could not write keeps its replay, because that is now its only copy.
+        if self._helper.persisted:
+            await clear(self.room)
+        else:
+            logger.warning('stopped turn not persisted, replay kept room=%s', self.room)
         await publish(self.room, error_event(_STOPPED))
 
     async def _retire(self) -> None:

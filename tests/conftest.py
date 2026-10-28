@@ -111,6 +111,10 @@ class FakeRedis:
         self.lists[key].extend(values)
         return len(self.lists[key])
 
+    async def incr(self, key):
+        self.store[key] = str(int(self.store.get(key, 0)) + 1)
+        return int(self.store[key])
+
     async def expire(self, key, ttl):
         self.expiry[key] = time.monotonic() + float(ttl)
         return True
