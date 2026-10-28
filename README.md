@@ -48,3 +48,66 @@ ASR 原輸出唔可以直接用。`postprocess` 做三件事：
 3. 過濾靜音幻覺（只得「係。」「嗯。」或純標點 → 回空字串）
 
 `text` 係空字串即係冇聽到嘢，前端唔應該當成一句用戶訊息送出。
+
+## Voice（`/api/voice/ws`）
+
+同 `/api/asr` 唔同：`/api/asr` 收一段完整錄音，voice WebSocket 收**連續串流**，由 server 決定一句幾時開始幾時完。
+
+```
+ws://localhost:8000/api/voice/ws?token=<data cloud token>
+```
+
+### 連線
+
+`accept` 之後先驗 token（同 chat WS 一樣用 `?token=`），失敗回 `4401`；同一帳號第二條連線或超出全域上限回 `4429`（先送 `VOICE_BUSY` 錯誤幀）。
+
+連上即刻收到：
+
+```json
+{"type":"ready","sample_rate":16000,"format":"pcm_s16le","channels":1,"max_seconds":60,"max_bytes":26214400,"concurrency":1,"wake_word":false,"vad":true}
+```
+
+### 上行
+
+| 幀 | 內容 |
+| --- | --- |
+| binary | PCM int16 LE、單聲道、16kHz。任意長度，server 自己拼 frame |
+| `{"type":"start"}` | 丟棄手上音訊，開新一句 |
+| `{"type":"cancel"}` | 丟棄手上音訊 |
+| `{"type":"stop"}` | 即刻收句，唔等 VAD |
+
+### 下行
+
+| `type` | 幾時送 |
+| --- | --- |
+| `ready` | 連上 |
+| `started` | 收到 `start` |
+| `wake` | 偵測到 wake word（`score`） |
+| `final` | 一句轉好：`text` / `duration_ms` / `elapsed_ms` / `truncated` |
+| `error` | `code` + `message`，socket 通常仲開得 |
+
+`text` 空白代表聽到聲但冇字，唔好當一句用戶訊息送出。
+
+### 流程
+
+1. **Wake word**（`VOICE_WAKE_MODEL`，openWakeWord ONNX）逐 80ms frame 打分，過 `VOICE_WAKE_THRESHOLD` 就送 `wake` 並清走緩衝，唔想將 wake word 本身送去轉錄
+2. **VAD**（Silero，openWakeWord 自帶 `silero_vad.onnx`）逐 30ms frame 判斷有冇人聲。講嘢之前嘅 250ms 放喺 ring buffer，一開口就連埋，唔會斬頭
+3. 靜 `VOICE_VAD_SILENCE_MS` 之後收句，短過 `VOICE_VAD_MIN_MS` 當雜音丟；長過 `VOICE_MAX_SECONDS` 就切開並標 `truncated`
+4. 收句交 `asr.engine.transcribe`（同 `/api/asr` 同一條路：併發 1、60s timeout、OpenCC `s2hk`）
+
+兩個 stage 都係 lazy 載入，模型唔喺度就靜靜關掉嗰個 stage，`ready` 嘅 `wake_word` / `vad` 會講返。
+
+### 限制
+
+| 項目 | 設定 | 預設 |
+| --- | --- | --- |
+| 全域連線 | `VOICE_MAX_CONNECTIONS` | 4 |
+| 每帳號連線 | `VOICE_MAX_PER_USER` | 1 |
+| 閒置 | `VOICE_IDLE_TIMEOUT` 秒冇 frame 就 `4408` | 300 |
+| 單句長度 | `VOICE_MAX_SECONDS` | 60 |
+| VAD | `VOICE_VAD_THRESHOLD` / `VOICE_VAD_SILENCE_MS` / `VOICE_VAD_LEAD_MS` / `VOICE_VAD_MIN_MS` | 0.5 / 1000 / 250 / 250 |
+| Wake word | `VOICE_WAKE_MODEL`（空 = 關）/ `VOICE_WAKE_THRESHOLD` | 空 / 0.5 |
+
+幀率開支：16kHz int16 單聲道 = 32KB/s，比 Opus（4KB/s 以內）大一個數量級。Opus 要 server 邊收邊 decode（libav pipe），未做。
+
+`GET /api/voice/health` 回連線數同各 stage 狀態。

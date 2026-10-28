@@ -19,6 +19,7 @@ dependencies = [
     "opencc-python-reimplemented>=0.1.7",
     "faster-whisper>=1.2.1",
     "mlx-audio>=0.6.2; sys_platform == 'darwin'",
+    "openwakeword>=0.4.0",
 ]
 
 
