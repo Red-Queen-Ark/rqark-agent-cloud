@@ -88,7 +88,7 @@ class Detector:
         score: float | None = None
         for start in range(0, whole, FRAME_SIZE):
             prediction = self.model.predict(buffer[start : start + FRAME_SIZE].copy())
-            current = max(prediction.values(), default=0.0)
+            current = float(max(prediction.values(), default=0.0))
             score = current if score is None else max(score, current)
         return score
 

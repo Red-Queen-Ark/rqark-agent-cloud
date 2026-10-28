@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 from src.apps.asr.errors import AsrTimeoutError
 from src.apps.voice import service as service_module
 from src.apps.voice import vad, wake
+from src.apps.voice.protocol import wake_event
 from src.apps.voice.registry import Registry, registry
 from src.apps.voice.session import duration_ms, int16_from_bytes, samples_from_bytes
 
@@ -140,6 +142,15 @@ def test_a_wake_score_under_the_threshold_does_not_fire():
     detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.49]))
 
     assert detector.fired(detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))) is False
+
+
+def test_the_wake_score_is_a_plain_float():
+    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([np.float32(0.87)]))
+
+    score = detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))
+
+    assert type(score) is float
+    assert json.loads(json.dumps(wake_event(score)))['score'] == 0.87
 
 
 def test_firing_resets_the_wake_stream():

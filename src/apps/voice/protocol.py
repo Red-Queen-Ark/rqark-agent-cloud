@@ -16,7 +16,7 @@ def final_event(text: str, duration_ms: int, elapsed_ms: int, truncated: bool) -
 
 
 def wake_event(score: float) -> dict[str, Any]:
-    return {'type': 'wake', 'score': round(score, 3)}
+    return {'type': 'wake', 'score': round(float(score), 3)}
 
 
 def error_event(code: str, message: str) -> dict[str, Any]:
