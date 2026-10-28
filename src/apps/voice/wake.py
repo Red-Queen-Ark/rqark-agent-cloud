@@ -8,6 +8,8 @@ import numpy as np
 from src.config import VOICE_WAKE_MODEL, VOICE_WAKE_THRESHOLD
 
 FRAME_SIZE = 1280
+MODELS_DIR = Path(__file__).parent / 'models'
+BUNDLED = 'wednesday'
 
 
 class WakeUnavailableError(Exception):
@@ -36,8 +38,29 @@ def available() -> bool:
     return importlib.util.find_spec('openwakeword.model') is not None
 
 
+def bundled(name: str = BUNDLED) -> Path:
+    return MODELS_DIR / f'{name}.onnx'
+
+
+def model_path() -> str:
+    """The configured model, or the one shipped in the package.
+
+    A path in VOICE_WAKE_MODEL wins, so a deployment can point at its own model without a
+    rebuild. An empty setting is not "off": the bundled model is used unless it is gone.
+    """
+    if VOICE_WAKE_MODEL:
+        return VOICE_WAKE_MODEL
+    candidate = bundled()
+    return str(candidate) if candidate.exists() else ''
+
+
 def configured() -> bool:
-    return bool(VOICE_WAKE_MODEL) and available()
+    return bool(model_path()) and available()
+
+
+def model_name() -> str:
+    path = model_path()
+    return Path(path).stem if path else ''
 
 
 class Detector:
@@ -47,10 +70,12 @@ class Detector:
     carried into the next one: the model only scores whole 80ms frames.
     """
 
-    def __init__(self, model_path: str = VOICE_WAKE_MODEL, threshold: float = VOICE_WAKE_THRESHOLD, load: Any = _load):
-        if not model_path:
-            raise WakeUnavailableError('VOICE_WAKE_MODEL is not set, the wake word stage cannot run')
-        self.model = load(model_path)
+    def __init__(self, path: str = '', threshold: float = VOICE_WAKE_THRESHOLD, load: Any = _load):
+        chosen = path or model_path()
+        if not chosen:
+            raise WakeUnavailableError('no wake word model is configured or bundled')
+        self.model = load(chosen)
+        self.name = Path(chosen).stem
         self.threshold = threshold
         self._tail = np.zeros(0, dtype=np.int16)
 
@@ -79,13 +104,9 @@ class Detector:
 
 
 def for_connection() -> Detector | None:
-    if not configured():
+    if not available():
         return None
     try:
         return Detector()
     except WakeUnavailableError:
         return None
-
-
-def model_name() -> str:
-    return Path(VOICE_WAKE_MODEL).stem if VOICE_WAKE_MODEL else ''

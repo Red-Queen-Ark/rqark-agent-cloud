@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -122,7 +123,7 @@ def test_duration_of_one_second():
 
 
 def test_a_short_chunk_is_carried_into_the_next_wake_frame():
-    detector = wake.Detector(model_path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.0]))
+    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.0]))
     half = np.zeros(wake.FRAME_SIZE // 2, dtype=np.int16)
 
     assert detector.push(half) is None
@@ -130,26 +131,33 @@ def test_a_short_chunk_is_carried_into_the_next_wake_frame():
 
 
 def test_the_highest_wake_score_in_a_chunk_wins():
-    detector = wake.Detector(model_path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.1, 0.9]))
+    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.1, 0.9]))
 
     assert detector.push(np.zeros(wake.FRAME_SIZE * 2, dtype=np.int16)) == pytest.approx(0.9)
 
 
 def test_a_wake_score_under_the_threshold_does_not_fire():
-    detector = wake.Detector(model_path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.49]))
+    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.49]))
 
     assert detector.fired(detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))) is False
 
 
 def test_firing_resets_the_wake_stream():
-    detector = wake.Detector(model_path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.9]))
+    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.9]))
 
     assert detector.fired(detector.push(np.zeros(wake.FRAME_SIZE, dtype=np.int16))) is True
     assert detector.model.resets == 1
 
 
-def test_no_wake_detector_without_a_configured_model(monkeypatch):
+def test_the_bundled_model_is_used_when_the_setting_is_empty(monkeypatch):
     monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', '')
+
+    assert wake.model_name() == 'wednesday'
+
+
+def test_no_wake_detector_without_any_model(monkeypatch):
+    monkeypatch.setattr(wake, 'VOICE_WAKE_MODEL', '')
+    monkeypatch.setattr(wake, 'bundled', lambda name='wednesday': Path('/nowhere/missing.onnx'))
 
     assert wake.for_connection() is None
 
@@ -229,7 +237,7 @@ async def test_a_voiced_utterance_comes_back_as_a_final_event(monkeypatch):
 
 
 async def test_a_wake_word_resets_the_utterance(monkeypatch):
-    detector = wake.Detector(model_path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.9]))
+    detector = wake.Detector(path='wednesday.onnx', threshold=0.5, load=lambda path: FakeWakeModel([0.9]))
     make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0))
     conn = await run([pcm(wake.FRAME_SIZE)])
 
