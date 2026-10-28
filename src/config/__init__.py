@@ -41,20 +41,6 @@ TASK_CONCURRENCY = _int_env('TASK_CONCURRENCY', '1')
 TASK_STREAM_MAX_CHARS = _int_env('TASK_STREAM_MAX_CHARS', str(200_000))
 TASK_LEADER_TTL = float(os.getenv('TASK_LEADER_TTL', '60'))
 
-# ASR
-ASR_ENGINE = os.getenv('ASR_ENGINE', '')
-ASR_MODEL = os.getenv('ASR_MODEL', '')
-ASR_MODEL_DIR = os.getenv('ASR_MODEL_DIR', '')
-ASR_LANGUAGE = os.getenv('ASR_LANGUAGE', 'Cantonese')
-ASR_SAMPLE_RATE = _int_env('ASR_SAMPLE_RATE', '16000')
-ASR_MAX_BYTES = _int_env('ASR_MAX_BYTES', str(25 * 1024 * 1024))
-ASR_MAX_SECONDS = _int_env('ASR_MAX_SECONDS', '60')
-ASR_TIMEOUT = float(os.getenv('ASR_TIMEOUT', '60'))
-ASR_QUEUE_TIMEOUT = float(os.getenv('ASR_QUEUE_TIMEOUT', '30'))
-ASR_CONCURRENCY = _int_env('ASR_CONCURRENCY', '1')
-ASR_OPENCC = _bool_env('ASR_OPENCC', 'true')
-ASR_OPENCC_CONFIG = os.getenv('ASR_OPENCC_CONFIG', 's2hk')
-
 # Sandbox
 SANDBOX_IMAGE = os.getenv('SANDBOX_IMAGE', 'ubuntu:24.04')
 WORKSPACE_MAX_BYTES = _int_env('WORKSPACE_MAX_BYTES', str(100 * 1024 * 1024))
