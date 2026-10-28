@@ -6,7 +6,7 @@ from src.apps.chat import replay
 async def test_record_then_read(room_env):
     await replay.record('s1', {'n': 1})
     await replay.record('s1', {'n': 2})
-    assert await replay.read('s1') == [{'n': 1}, {'n': 2}]
+    assert await replay.read('s1') == [{'n': 1, 'seq': 1}, {'n': 2, 'seq': 2}]
 
 
 async def test_clear_removes_events(room_env):
@@ -18,8 +18,8 @@ async def test_clear_removes_events(room_env):
 async def test_record_is_isolated_per_session(room_env):
     await replay.record('s3', {'n': 1})
     await replay.record('s4', {'n': 2})
-    assert await replay.read('s3') == [{'n': 1}]
-    assert await replay.read('s4') == [{'n': 2}]
+    assert await replay.read('s3') == [{'n': 1, 'seq': 1}]
+    assert await replay.read('s4') == [{'n': 2, 'seq': 1}]
 
 
 async def test_read_skips_corrupt_entries(room_env):
@@ -38,3 +38,20 @@ async def test_replay_survives_redis_outage(room_env, monkeypatch):
     monkeypatch.setattr(replay_module, 'get_redis', no_redis)
     assert await replay.read('s6') == []
     await replay.record('s6', {'n': 2})
+
+
+async def test_seq_keeps_counting_after_a_clear(room_env):
+    await replay.record('s7', {'n': 1})
+    await replay.record('s7', {'n': 2})
+    await replay.clear('s7')
+    await replay.record('s7', {'n': 3})
+
+    # The counter outlives the list: a reader that kept its last seq across a
+    # turn must never see the numbering restart underneath it.
+    assert await replay.read('s7') == [{'n': 3, 'seq': 3}]
+
+
+async def test_record_returns_the_stamped_frame(room_env):
+    stamped = await replay.record('s8', {'n': 1})
+
+    assert stamped == {'n': 1, 'seq': 1}
