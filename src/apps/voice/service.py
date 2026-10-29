@@ -35,10 +35,20 @@ class _Connection:
         self.detector = detector
         self.segmenter = segmenter
         self.stream = PcmStream()
+        self.utterance_bytes = 0
         self.wake_mode = False
         self.gated = False
         self.since_wake = 0.0
         self.utterances = 0
+
+    def restart_utterance(self) -> None:
+        """Start a fresh utterance: clear the partial sample and the byte budget.
+
+        The budget is per utterance, not per connection, because an always-on socket sends
+        audio for as long as it stays open and would otherwise be closed mid session.
+        """
+        self.stream.reset()
+        self.utterance_bytes = 0
 
     async def send(self, payload: dict) -> bool:
         """Send an event, reporting whether the socket is still there."""
@@ -67,10 +77,12 @@ class _Connection:
             return True
         if len(chunk) > VOICE_MAX_FRAME_BYTES:
             return await self.send(error_event('FRAME_TOO_LARGE', f'a frame may carry at most {VOICE_MAX_FRAME_BYTES} bytes'))
-        if self.stream.total + len(chunk) > VOICE_MAX_BYTES:
-            await self.send(error_event('AUDIO_TOO_LARGE', f'an utterance budget of {VOICE_MAX_BYTES} bytes is exhausted'))
-            await self.websocket.close(code=1009)
-            return False
+        if not self.gated:
+            self.utterance_bytes += len(chunk)
+            if self.utterance_bytes > VOICE_MAX_BYTES:
+                await self.send(error_event('AUDIO_TOO_LARGE', f'an utterance budget of {VOICE_MAX_BYTES} bytes is exhausted'))
+                await self.websocket.close(code=1009)
+                return False
         audio = self.stream.feed(chunk)
         if audio.size == 0:
             return True
@@ -85,7 +97,7 @@ class _Connection:
                 return True
             self.gated = False
             self.since_wake = time.monotonic()
-            self.stream.reset()
+            self.restart_utterance()
             logger.info('voice wake detected user=%s model=%s score=%.3f preroll=%d', self.user_id, detection.name or '?', detection.score or 0.0, detection.preroll.size)
             if not await self.send(wake_event(detection.score or 0.0, detection.name or '')):
                 return False
@@ -102,7 +114,7 @@ class _Connection:
 
     async def drain(self, segments: list[vad.Segment]) -> bool:
         for segment in segments:
-            self.stream.reset()
+            self.restart_utterance()
             self.utterances += 1
             if not await self.transcribe(segment):
                 return False
@@ -228,13 +240,13 @@ async def _handle_control(connection: _Connection, text: str) -> bool:
         connection.gated = await connection.rearm_async()
         return True
     if kind == 'start':
-        connection.stream.reset()
+        connection.restart_utterance()
         connection.gated = await connection.rearm_async()
         if connection.segmenter is not None:
             await asyncio.to_thread(connection.segmenter.reset)
         return await connection.send(started_event())
     if kind == 'cancel':
-        connection.stream.reset()
+        connection.restart_utterance()
         connection.gated = await connection.rearm_async()
         if connection.segmenter is not None:
             await asyncio.to_thread(connection.segmenter.reset)
@@ -243,7 +255,7 @@ async def _handle_control(connection: _Connection, text: str) -> bool:
         segment = None
         if connection.segmenter is not None:
             segment = await asyncio.to_thread(connection.segmenter.flush)
-        connection.stream.reset()
+        connection.restart_utterance()
         if segment is None:
             connection.gated = await connection.rearm_async()
             return await connection.send(error_event('AUDIO_EMPTY', 'no speech arrived before the utterance ended'))

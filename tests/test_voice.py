@@ -724,3 +724,39 @@ async def test_a_broken_redis_degrades_instead_of_refusing(monkeypatch):
     local = Registry(max_connections=4, max_per_user=1, use_redis=True)
 
     assert await local.acquire('u1', 'a') is None
+
+
+class CyclicVadModel:
+    """Voiced for three frames, then silent, over and over, so utterances keep finishing."""
+
+    def __init__(self, period=9):
+        self.period = period
+        self.frames = 0
+
+    def predict(self, frame, frame_size=480):
+        self.frames += 1
+        return np.array([1.0 if self.frames % self.period < 3 else 0.0], dtype=np.float32)
+
+    def reset_states(self):
+        return None
+
+
+async def test_the_byte_budget_is_refilled_for_every_utterance(monkeypatch):
+    monkeypatch.setattr(service_module, 'VOICE_MAX_BYTES', 10000)
+    segmenter = vad.Segmenter(threshold=0.5, silence_ms=60, lead_ms=90, min_ms=30, load=CyclicVadModel)
+    make_env(monkeypatch, detector=None, segmenter=segmenter)
+    chunks = [pcm(600) for _ in range(30)]
+
+    conn = await run(chunks)
+
+    assert conn.close_code is None
+    assert [frame['type'] for frame in conn.sent].count('final') > 1
+
+
+async def test_a_single_utterance_over_the_budget_closes_the_socket(monkeypatch):
+    monkeypatch.setattr(service_module, 'VOICE_MAX_BYTES', 4000)
+    make_env(monkeypatch, segmenter=fake_segmenter(voiced_frames=100_000, silence_ms=1000, min_ms=30))
+    conn = await run([pcm(vad.FRAME_SIZE * 6)])
+
+    assert conn.sent[-1]['error']['code'] == 'AUDIO_TOO_LARGE'
+    assert conn.close_code == 1009
