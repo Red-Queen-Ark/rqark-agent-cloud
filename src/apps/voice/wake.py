@@ -1,7 +1,9 @@
 import importlib
 import importlib.util
 import threading
+import warnings
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, Sequence, cast
@@ -110,13 +112,21 @@ def _flush(model: Any) -> None:
     model.reset()
 
 
+@contextmanager
+def _cpu_only() -> Any:
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=".*CUDAExecutionProvider.*", category=UserWarning)
+        yield
+
+
 def _load(paths: Sequence[str]) -> WakeModel:
     try:
         module = importlib.import_module('openwakeword.model')
     except ImportError as error:
         raise WakeUnavailableError('openwakeword is not installed, the wake word stage cannot run') from error
     try:
-        model = module.Model(wakeword_model_paths=list(paths))
+        with _cpu_only():
+            model = module.Model(wakeword_model_paths=list(paths))
     except Exception as error:
         raise WakeUnavailableError(f'cannot load wake word model {", ".join(paths)}: {error}') from error
     if getattr(model, 'preprocessor', None) is not None:
