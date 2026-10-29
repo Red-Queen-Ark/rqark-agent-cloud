@@ -113,6 +113,7 @@ package 冇裝或者冇配置就靜靜關掉嗰個 stage，`ready` 嘅 `wake_wor
 
 | 項目 | 設定 | 預設 |
 | --- | --- | --- |
+| 整體開關 | `SPEECH_ENABLED`（預設 false）控制晒 ASR 同語音：false 就唔掛 `/api/asr`、`/api/voice`，連 openWakeWord / ASR 都唔 import（細機純文字用） | false |
 | 全域連線 | `VOICE_MAX_CONNECTIONS`（Redis lease，跨 worker） | 8 |
 | 每帳號連線 | `VOICE_MAX_PER_USER` | 1 |
 | 跨 worker 計數 | `VOICE_REDIS` / `VOICE_LEASE_TTL` | true / 360 |

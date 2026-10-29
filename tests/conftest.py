@@ -1,8 +1,11 @@
 import asyncio
+import os
 import time
 from collections import defaultdict
 
 import pytest
+
+os.environ['SPEECH_ENABLED'] = 'true'
 
 from src.apps.chat import lock as lock_module
 from src.apps.chat import replay as replay_module
