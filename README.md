@@ -95,7 +95,7 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 
 1. **Wake word**（內置 `src/apps/voice/models/wednesday.onnx`，openWakeWord ONNX）。`VOICE_WAKE_MODEL` 填內置名（`wednesday,diana`）或路徑，逗號分隔可以多個，一個 openWakeWord 實例會同時幫全部 model 打分，共用同一份 feature extractor，所以多一個詞成本好低。逐 80ms frame 打分。`mode` 係 `wake` 時，叫醒之前嘅音訊只入 wake model，VAD 同 ASR 完全唔行
 2. 任何一個 model 過 `VOICE_WAKE_THRESHOLD` 就送 `wake`（`name` 講邊個中）；同一 chunk 喚醒詞後面嘅音訊會交返落 VAD（唔會漏咗命令開頭），之後嗰個 model 喺 `VOICE_WAKE_COOLDOWN` 秒內唔再 fire，其他 model 照計
-3. 喚醒詞之前 `VOICE_PREROLL_MS`（預設 400ms）嘅音訊會被留住，但**唔會即刻開一句**。要等 VAD 真正聽到人聲才開，開嗰時連埋呢段音一齊用，所以「wednesday 今日天氣」唔會漏咗開頭。太長會連喚醒詞本身都轉埋字
+3. 喚醒詞之前 `VOICE_PREROLL_MS`（預設 400ms）嘅音訊、同叫醒之後 `VOICE_WAKE_GUARD_MS`（預設 400ms）嘅音訊，都會被留住但**唔會即刻開一句**。要等 VAD 真正聽到人聲才開，開嗰時連埋呢兩段一齊用，所以「wednesday 今日天氣」唔會漏咗開頭。太長會連喚醒詞本身都轉埋字。守衛期係為咗蓋住喚醒詞尾巴——唔蓋嘅話，尾巴會被 VAD 當成人聲，結果「叫醒 + 靜音」都變成一句送去轉錄，出「聽唔清楚」
 4. 叫醒之後一直冇人聲，`VOICE_WAKE_WINDOW`（預設 10s）之後送 `VOICE_WAKE_TIMEOUT` 並回去等喚醒詞 —— 唔會拿住一段靜音去轉錄
 5. **VAD**（Silero，openWakeWord 自帶 `silero_vad.onnx`）逐 30ms frame 判斷有冇人聲。講嘢之前嘅 250ms 放喺 ring buffer，一開口就連埋，唔會斬頭
 6. 靜 `VOICE_VAD_SILENCE_MS` 之後收句，短過 `VOICE_VAD_MIN_MS` 當雜音丟；長過 `VOICE_MAX_SECONDS` 就切開並標 `truncated`
@@ -121,6 +121,7 @@ package 冇裝或者冇配置就靜靜關掉嗰個 stage，`ready` 嘅 `wake_wor
 | 單句位元組 | `VOICE_MAX_BYTES`，超出 `AUDIO_TOO_LARGE` 並 `close(1009)` | 25MB |
 | 單幀上限 | `VOICE_MAX_FRAME_BYTES`，超出 `FRAME_TOO_LARGE`（唔斷線） | 64KB |
 | 預留音訊 | `VOICE_PREROLL_MS` | 400 |
+| 叫醒後靜默期 | `VOICE_WAKE_GUARD_MS`，呢段音唔計入「開始講嘢」 | 400 |
 | VAD | `VOICE_VAD_THRESHOLD` / `VOICE_VAD_SILENCE_MS` / `VOICE_VAD_LEAD_MS` / `VOICE_VAD_MIN_MS` | 0.5 / 800 / 250 / 250 |
 | Wake word | `VOICE_WAKE_MODEL`（空 = 用內置 `wednesday`；可寫 `wednesday,diana` 或多個路徑）/ `VOICE_WAKE_THRESHOLD` | 空 / 0.5 |
 | 重複觸發 | `VOICE_WAKE_COOLDOWN` 秒內同一個 model 唔再 fire | 1.5 |

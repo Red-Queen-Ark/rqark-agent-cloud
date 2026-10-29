@@ -417,7 +417,8 @@ async def test_speech_before_the_wake_word_never_reaches_the_transcriber(monkeyp
 async def test_the_rest_of_the_chunk_after_the_wake_word_still_runs(monkeypatch):
     detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
     make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=3, silence_ms=60, min_ms=30))
-    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE + vad.FRAME_SIZE * 6)])
+    chunk = wake.FRAME_SIZE + int(0.5 * 16000) + vad.FRAME_SIZE * 6
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(chunk)])
 
     assert conn.sent[1] == {'type': 'wake', 'score': 0.9, 'name': 'wednesday'}
     assert conn.sent[2]['type'] == 'final'
@@ -787,3 +788,62 @@ async def test_a_single_utterance_over_the_budget_closes_the_socket(monkeypatch)
 
     assert conn.sent[-1]['error']['code'] == 'AUDIO_TOO_LARGE'
     assert conn.close_code == 1009
+
+
+class WakeTailVad:
+    """Voice only for the first `frames` predictions, like the tail of the wake word."""
+
+    def __init__(self, frames):
+        self.limit = frames
+        self.frames = 0
+
+    def predict(self, frame, frame_size=480):
+        self.frames += 1
+        return np.array([1.0 if self.frames <= self.limit else 0.0], dtype=np.float32)
+
+    def reset_states(self):
+        return None
+
+
+class CountingVad:
+    def __init__(self, voiced):
+        self.limit = voiced
+        self.frames = 0
+
+    def predict(self, frame, frame_size=480):
+        self.frames += 1
+        return np.array([1.0 if self.frames <= self.limit else 0.0], dtype=np.float32)
+
+    def reset_states(self):
+        return None
+
+
+def test_the_audio_right_after_the_wake_word_is_never_scored():
+    model = CountingVad(1000)
+    segmenter = vad.Segmenter(threshold=0.5, silence_ms=60, lead_ms=90, min_ms=250, load=lambda: model)
+    guard = 6400
+
+    segmenter.extend_pending(np.zeros(guard, dtype=np.int16))
+
+    assert model.frames == 0
+    assert segmenter.active is False
+
+
+def test_the_guarded_audio_still_reaches_the_utterance():
+    segmenter = vad.Segmenter(threshold=0.5, silence_ms=60, lead_ms=90, min_ms=250, load=lambda: CountingVad(40))
+    segmenter.prime(np.zeros(vad.FRAME_SIZE * 2, dtype=np.int16))
+    guard = 6400
+    rest = np.zeros(480 * 120, dtype=np.int16)
+
+    segmenter.extend_pending(rest[:guard])
+    segments = segmenter.push(rest[guard:])
+
+    assert segments
+    assert segments[0].samples.size > vad.FRAME_SIZE * 2 + guard
+
+
+def test_an_utterance_that_is_only_the_wake_tail_is_dropped():
+    segmenter = vad.Segmenter(threshold=0.5, silence_ms=60, lead_ms=90, min_ms=250, load=lambda: CountingVad(2))
+    segmenter.prime(np.zeros(vad.FRAME_SIZE * 2, dtype=np.int16))
+
+    assert segmenter.push(np.zeros(480 * 60, dtype=np.int16)) == []

@@ -12,7 +12,7 @@ from src.apps.voice import vad, wake
 from src.apps.voice.protocol import error_event, final_event, ready_event, started_event, wake_event
 from src.apps.voice.registry import registry
 from src.apps.voice.session import PcmStream, duration_ms
-from src.config import ASR_CONCURRENCY, VOICE_IDLE_TIMEOUT, VOICE_MAX_BYTES, VOICE_MAX_FRAME_BYTES, VOICE_WAKE_WINDOW
+from src.config import ASR_CONCURRENCY, ASR_SAMPLE_RATE, VOICE_IDLE_TIMEOUT, VOICE_MAX_BYTES, VOICE_MAX_FRAME_BYTES, VOICE_WAKE_GUARD_MS, VOICE_WAKE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,10 @@ class _Connection:
                 if detection.preroll.size:
                     await asyncio.to_thread(self.segmenter.prime, detection.preroll)
             audio = detection.rest
+            if audio.size and self.segmenter is not None:
+                guard = min(audio.size, int(VOICE_WAKE_GUARD_MS * ASR_SAMPLE_RATE / 1000))
+                await asyncio.to_thread(self.segmenter.extend_pending, audio[:guard])
+                audio = audio[guard:]
             if audio.size == 0:
                 return True
         if self.segmenter is None:

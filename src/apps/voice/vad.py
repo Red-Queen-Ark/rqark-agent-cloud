@@ -89,7 +89,6 @@ class Segmenter:
         self._voiced = 0
         self._active = False
         self._pending: np.ndarray | None = None
-        self._pending_frames = 0
 
     @property
     def active(self) -> bool:
@@ -134,7 +133,6 @@ class Segmenter:
             self._speech = [*lead, frame]
             self.ring.clear()
             self._count = int(np.ceil(sum(frame.size for frame in self._speech) / FRAME_SIZE))
-            self._pending_frames = 0
             self._voiced = 1
             self._quiet = 0
             return None
@@ -165,13 +163,26 @@ class Segmenter:
         if samples.size == 0:
             return
         self._pending = samples.astype(np.int16, copy=False)
-        self._pending_frames = int(np.ceil(samples.size / FRAME_SIZE))
         self._speech = []
         self._count = 0
         self._voiced = 0
         self._quiet = 0
         self._active = False
         self.ring.clear()
+
+    def extend_pending(self, samples: np.ndarray) -> None:
+        """Append audio to the lead-in without letting it open an utterance.
+
+        Used for the moment right after the wake word fires: the tail of the word is still
+        arriving and the VAD would score it as the start of a request, which turns "hey
+        assistant" followed by silence into an empty turn. Keeping it out of the voice
+        decision but still inside the audio means a command spoken straight away is not
+        clipped either.
+        """
+        if samples.size == 0:
+            return
+        incoming = samples.astype(np.int16, copy=False)
+        self._pending = incoming if self._pending is None else np.concatenate((self._pending, incoming))
 
     def _finish(self, truncated: bool = False) -> Segment | None:
         frames = self._speech
@@ -197,7 +208,6 @@ class Segmenter:
         self._voiced = 0
         self._active = False
         self._pending = None
-        self._pending_frames = 0
         self.ring.clear()
         self._tail = np.zeros(0, dtype=np.int16)
         self.model.reset_states()
