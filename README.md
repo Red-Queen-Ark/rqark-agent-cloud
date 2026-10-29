@@ -16,7 +16,7 @@ WAV 由 Python 直接解，其他格式（webm / ogg / mp4）交 ffmpeg，所以
 | --- | --- | --- | --- |
 | 空（預設） | Apple Silicon 用 `qwen3`，其餘用 `faster-whisper` | 自動 | 見下 |
 | `qwen3` | `mlx-audio` + Qwen3-ASR | 只限 Apple Silicon | `mlx-community/Qwen3-ASR-0.6B-8bit` |
-| `faster-whisper` | `ctranslate2` | CPU / GPU | `large-v3`（`ASR_MODEL=small` 落細機） |
+| `faster-whisper` | `ctranslate2` | CPU / GPU | `large-v3`（CPU server 用 `ASR_MODEL=small`） |
 
 粵語用 `qwen3`：Whisper 嘅 yue 會將口語粵語書面語化，`initial_prompt` 拗唔返。
 
@@ -33,7 +33,7 @@ uv lock
 
 | 項目 | 需求 |
 | --- | --- |
-| 記憶體 | `faster-whisper large-v3` int8 約 2GB，`qwen3` 0.6B-8bit 約 2GB，連 app 建議 container limit ≥ 3GB（compose 預設 `ASR_MEM_LIMIT=3g`） |
+| 記憶體 | `faster-whisper large-v3` int8 約 2GB，`qwen3` 0.6B-8bit 約 2GB，連 app 建議 container limit ≥ 4GB（compose 預設 `ASR_MEM_LIMIT=4g`） |
 | 併發 | `ASR_CONCURRENCY`（預設 1），超額排隊 `ASR_QUEUE_TIMEOUT` 秒，再超就 429 |
 | 逾時 | `ASR_TIMEOUT`（預設 60s），超時回 504。thread 停唔到，所以併發要細 |
 | 上傳上限 | `ASR_MAX_BYTES`（預設 25MB）、`ASR_MAX_SECONDS`（預設 60s），超出回 413 |
@@ -64,7 +64,7 @@ ws://localhost:8000/api/voice/ws?token=<data cloud token>
 連上即刻收到：
 
 ```json
-{"type":"ready","sample_rate":16000,"format":"pcm_s16le","channels":1,"max_seconds":60,"max_bytes":26214400,"max_frame_bytes":65536,"preroll_ms":3000,"concurrency":1,"wake_word":true,"wake_models":["wednesday","diana"],"vad":true}
+{"type":"ready","sample_rate":16000,"format":"pcm_s16le","channels":1,"max_seconds":60,"max_bytes":26214400,"max_frame_bytes":65536,"preroll_ms":400,"concurrency":1,"wake_word":true,"wake_models":["wednesday","diana"],"vad":true}
 ```
 
 ### 上行

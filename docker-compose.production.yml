@@ -20,8 +20,8 @@ services:
       - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
       - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
       - WORKSPACE_SHELL_MAX_BYTES=${WORKSPACE_SHELL_MAX_BYTES:-8388608}
-      - ASR_ENGINE=${ASR_ENGINE:-}
-      - ASR_MODEL=${ASR_MODEL:-}
+      - ASR_ENGINE=${ASR_ENGINE:-faster-whisper}
+      - ASR_MODEL=${ASR_MODEL:-small}
       - ASR_MODEL_DIR=/models/whisper
       - ASR_LANGUAGE=${ASR_LANGUAGE:-Cantonese}
       - ASR_MAX_BYTES=${ASR_MAX_BYTES:-26214400}
@@ -31,13 +31,13 @@ services:
       - ASR_QUEUE_DEPTH=${ASR_QUEUE_DEPTH:-2}
       - ASR_OPENCC=${ASR_OPENCC:-true}
       - ASR_OPENCC_CONFIG=${ASR_OPENCC_CONFIG:-s2hk}
-      - VOICE_MAX_CONNECTIONS=${VOICE_MAX_CONNECTIONS:-8}
+      - VOICE_MAX_CONNECTIONS=${VOICE_MAX_CONNECTIONS:-3}
       - VOICE_MAX_PER_USER=${VOICE_MAX_PER_USER:-1}
       - VOICE_REDIS=${VOICE_REDIS:-true}
       - VOICE_LEASE_TTL=${VOICE_LEASE_TTL:-360}
       - VOICE_MAX_BYTES=${VOICE_MAX_BYTES:-26214400}
       - VOICE_MAX_FRAME_BYTES=${VOICE_MAX_FRAME_BYTES:-65536}
-      - VOICE_PREROLL_MS=${VOICE_PREROLL_MS:-3000}
+      - VOICE_PREROLL_MS=${VOICE_PREROLL_MS:-400}
       - VOICE_WAKE_MODEL=${VOICE_WAKE_MODEL:-wednesday,diana}
       - VOICE_WAKE_WINDOW=${VOICE_WAKE_WINDOW:-10}
       - VOICE_VAD_SILENCE_MS=${VOICE_VAD_SILENCE_MS:-800}
@@ -45,7 +45,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - asr-models:/models
-    mem_limit: ${ASR_MEM_LIMIT:-3g}
+    mem_limit: ${ASR_MEM_LIMIT:-4g}
     container_name: ${PROJECT_NAME}-server
     networks:
       - rqark-project
