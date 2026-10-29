@@ -87,8 +87,9 @@ class Segmenter:
         self._count = 0
         self._quiet = 0
         self._voiced = 0
-        self._primed_voiced = 0
         self._active = False
+        self._pending: np.ndarray | None = None
+        self._pending_frames = 0
 
     @property
     def active(self) -> bool:
@@ -96,12 +97,12 @@ class Segmenter:
 
     @property
     def speaking(self) -> bool:
-        """Whether voiced audio arrived after the utterance was opened.
+        """Whether the user has actually started an utterance.
 
-        A primed utterance counts as active from the start, so `active` cannot tell a user
-        who started talking from one who only said the wake word and stopped.
+        Audio handed over by `prime()` does not count: it was said before the wake word, and
+        the wake word alone must not look like a finished turn.
         """
-        return self._active and self._voiced > self._primed_voiced
+        return self._active
 
     def probability(self, frame: np.ndarray) -> float:
         scores = self.model.predict(frame, frame_size=frame.size)
@@ -128,9 +129,12 @@ class Segmenter:
                 self.ring.append(frame)
                 return None
             self._active = True
-            self._speech = [*self.ring, frame]
+            lead = [self._pending, *self.ring] if self._pending is not None else list(self.ring)
+            self._pending = None
+            self._speech = [*lead, frame]
             self.ring.clear()
-            self._count = len(self._speech)
+            self._count = int(np.ceil(sum(frame.size for frame in self._speech) / FRAME_SIZE))
+            self._pending_frames = 0
             self._voiced = 1
             self._quiet = 0
             return None
@@ -148,21 +152,25 @@ class Segmenter:
         return None
 
     def prime(self, samples: np.ndarray) -> None:
-        """Open an utterance with audio that was already spoken.
+        """Keep the audio spoken before the wake word, without opening an utterance.
 
-        The wake word fires after the user started talking, so the audio in front of the hit
-        is real speech the VAD never saw. Feeding it in this way keeps the utterance whole
-        instead of starting mid sentence. The wake word itself is proof that someone spoke,
-        so the voiced-frame guard is treated as satisfied.
+        The wake word fires a moment after the user started talking, so the audio in front of
+        the hit is real speech the VAD never scored. Holding it until the first voiced frame
+        keeps that speech in the utterance.
+
+        It must not open the utterance on its own: the wake word is proof that someone spoke,
+        so opening here would let the silence timer close a turn that contains no request at
+        all — which answers the wake word itself.
         """
         if samples.size == 0:
             return
-        self._speech = [samples.astype(np.int16, copy=False)]
-        self._active = True
-        self._count = int(np.ceil(samples.size / FRAME_SIZE))
-        self._voiced = max(self.min_frames, self._count)
-        self._primed_voiced = self._voiced
+        self._pending = samples.astype(np.int16, copy=False)
+        self._pending_frames = int(np.ceil(samples.size / FRAME_SIZE))
+        self._speech = []
+        self._count = 0
+        self._voiced = 0
         self._quiet = 0
+        self._active = False
         self.ring.clear()
 
     def _finish(self, truncated: bool = False) -> Segment | None:
@@ -187,8 +195,9 @@ class Segmenter:
         self._count = 0
         self._quiet = 0
         self._voiced = 0
-        self._primed_voiced = 0
         self._active = False
+        self._pending = None
+        self._pending_frames = 0
         self.ring.clear()
         self._tail = np.zeros(0, dtype=np.int16)
         self.model.reset_states()

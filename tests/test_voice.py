@@ -587,10 +587,10 @@ def test_the_pre_roll_is_bounded():
     assert detection.preroll.size <= wake.FRAME_SIZE * 2
 
 
-async def test_the_wake_word_audio_is_not_dropped_from_the_utterance(monkeypatch):
+async def test_the_audio_before_the_wake_word_reaches_the_utterance(monkeypatch):
     detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
-    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=30))
-    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE), pcm(vad.FRAME_SIZE * 2)])
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=3, silence_ms=60, min_ms=30))
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE), pcm(vad.FRAME_SIZE * 6)])
 
     final = [event for event in conn.sent if event['type'] == 'final']
 
@@ -598,14 +598,41 @@ async def test_the_wake_word_audio_is_not_dropped_from_the_utterance(monkeypatch
     assert final[0]['duration_ms'] > 60
 
 
-def test_a_primed_utterance_survives_the_voiced_frame_guard():
-    segmenter = fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=90)
+async def test_a_silent_room_after_the_wake_word_sends_nothing(monkeypatch):
+    detector = wake.Detector(paths=['wednesday.onnx'], threshold=0.5, load=lambda paths: FakeWakeModel([0.9]))
+    make_env(monkeypatch, detector=detector, segmenter=fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=30))
+    conn = await run(['{"type":"mode","value":"wake"}', pcm(wake.FRAME_SIZE), pcm(vad.FRAME_SIZE * 2)])
+
+    assert [event['type'] for event in conn.sent] == ['ready', 'wake']
+
+
+def test_the_audio_kept_before_the_wake_word_is_prepended_once_the_user_speaks():
+    segmenter = fake_segmenter(voiced_frames=3, silence_ms=60, min_ms=30)
 
     segmenter.prime(np.zeros(vad.FRAME_SIZE * 2, dtype=np.int16))
-    await_speech = segmenter.push(np.zeros(vad.FRAME_SIZE * 4, dtype=np.int16))
+    segments = segmenter.push(np.zeros(vad.FRAME_SIZE * 6, dtype=np.int16))
 
-    assert await_speech
-    assert await_speech[0].samples.size >= vad.FRAME_SIZE * 2
+    assert segments
+    assert segments[0].samples.size >= vad.FRAME_SIZE * 2
+
+
+def test_the_audio_kept_before_the_wake_word_never_opens_an_utterance():
+    segmenter = fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=30)
+
+    segmenter.prime(np.zeros(vad.FRAME_SIZE * 2, dtype=np.int16))
+
+    assert segmenter.push(np.zeros(vad.FRAME_SIZE * 100, dtype=np.int16)) == []
+    assert segmenter.active is False
+    assert segmenter.speaking is False
+
+
+def test_a_quiet_room_after_the_wake_word_is_not_a_turn():
+    segmenter = fake_segmenter(voiced_frames=0, silence_ms=60, min_ms=30)
+
+    segmenter.prime(np.zeros(16000, dtype=np.int16))
+    segments = segmenter.push(np.zeros(vad.FRAME_SIZE * 200, dtype=np.int16))
+
+    assert segments == []
 
 
 def test_a_primed_utterance_is_not_speaking_until_a_voiced_frame_lands():
