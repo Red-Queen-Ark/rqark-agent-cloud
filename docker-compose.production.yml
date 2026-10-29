@@ -22,6 +22,7 @@ services:
       - WORKSPACE_SHELL_MAX_BYTES=${WORKSPACE_SHELL_MAX_BYTES:-8388608}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    mem_limit: ${MEM_LIMIT:-4g}
     container_name: ${PROJECT_NAME}-server
     networks:
       - rqark-project

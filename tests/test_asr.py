@@ -1,4 +1,5 @@
 import struct
+import threading
 
 import numpy as np
 import pytest
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 from src.app import create_fastapi_app
 from src.apps.asr import engine as engine_module
 from src.apps.asr import routes as routes_module
-from src.apps.asr.engines import build_engine
+from src.apps.asr.engines import build_engine, qwen3_language, whisper_language
 from src.apps.asr.errors import AsrBusyError, AsrTimeoutError, AsrUnavailableError
 from src.middleware.auth import get_current_user
 
@@ -25,10 +26,13 @@ def build_wav(values, rate=16000):
 class FakeEngine:
     name = 'fake'
 
-    def __init__(self):
+    def __init__(self, gate=None):
         self.seen = []
+        self.gate = gate
 
     def transcribe(self, audio):
+        if self.gate is not None:
+            self.gate.wait(timeout=2)
         self.seen.append(audio)
         return '你系边个'
 
@@ -143,6 +147,21 @@ def test_get_engine_loads_once(monkeypatch):
     engine_module.reset()
 
 
+def test_cantonese_maps_to_a_whisper_code():
+    assert whisper_language('Cantonese') == 'yue'
+    assert whisper_language('yue') == 'yue'
+    assert whisper_language('en') == 'en'
+    assert whisper_language('') is None
+    assert whisper_language(None) is None
+
+
+def test_yue_maps_to_the_qwen3_language_name():
+    assert qwen3_language('yue') == 'Cantonese'
+    assert qwen3_language('Cantonese') == 'Cantonese'
+    assert qwen3_language('en') == 'en'
+    assert qwen3_language(None) is None
+
+
 def test_unknown_engine_is_rejected():
     with pytest.raises(AsrUnavailableError, match='unknown asr engine'):
         build_engine('parakeet')
@@ -156,13 +175,33 @@ def test_engine_state_before_loading():
     assert state['concurrency'] >= 1
 
 
-def test_transcribe_sync_rejects_when_all_slots_are_taken(monkeypatch):
-    taken = engine_module.threading.BoundedSemaphore(1)
-    taken.acquire()
-    monkeypatch.setattr(engine_module, '_slots', taken)
-    monkeypatch.setattr(engine_module, 'ASR_QUEUE_TIMEOUT', 0.01)
-    with pytest.raises(AsrBusyError):
-        engine_module._transcribe_sync(FakeEngine(), np.zeros(10, dtype=np.float32))
+def test_a_full_queue_is_refused(monkeypatch):
+    engine_module.reset()
+    monkeypatch.setattr(engine_module, 'ASR_CONCURRENCY', 1)
+    monkeypatch.setattr(engine_module, 'ASR_QUEUE_DEPTH', 0)
+    gate = threading.Event()
+    engine = FakeEngine(gate=gate)
+    try:
+        engine_module._submit(engine, np.zeros(10, dtype=np.float32))
+        with pytest.raises(AsrBusyError):
+            engine_module._submit(engine, np.zeros(10, dtype=np.float32))
+    finally:
+        gate.set()
+        engine_module.reset()
+
+
+def test_a_running_job_keeps_its_slot_counted(monkeypatch):
+    engine_module.reset()
+    monkeypatch.setattr(engine_module, 'ASR_CONCURRENCY', 1)
+    monkeypatch.setattr(engine_module, 'ASR_QUEUE_DEPTH', 0)
+    gate = threading.Event()
+    engine = FakeEngine(gate=gate)
+    try:
+        engine_module._submit(engine, np.zeros(10, dtype=np.float32))
+        assert engine_module.state()['queued'] == 1
+    finally:
+        gate.set()
+        engine_module.reset()
 
 
 async def test_transcribe_applies_postprocess(monkeypatch):
@@ -177,15 +216,19 @@ async def test_transcribe_times_out(monkeypatch):
     monkeypatch.setattr(engine_module, 'get_engine', lambda: FakeEngine())
     monkeypatch.setattr(engine_module, 'ASR_TIMEOUT', 0.01)
 
-    def hang(engine, audio):
-        import time
+    gate = threading.Event()
 
-        time.sleep(0.2)
+    def hang(audio):
+        gate.wait(timeout=2)
         return 'too late'
 
-    monkeypatch.setattr(engine_module, '_transcribe_sync', hang)
-    with pytest.raises(AsrTimeoutError):
-        await engine_module.transcribe(np.zeros(10, dtype=np.float32))
+    monkeypatch.setattr(FakeEngine, 'transcribe', lambda self, audio: hang(audio))
+    try:
+        with pytest.raises(AsrTimeoutError):
+            await engine_module.transcribe(np.zeros(10, dtype=np.float32))
+    finally:
+        gate.set()
+        engine_module.reset()
 
 
 async def test_transcribe_of_silence_returns_empty(monkeypatch):

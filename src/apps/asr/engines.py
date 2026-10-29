@@ -14,6 +14,21 @@ WHISPER_BEAM_SIZE = 5
 WHISPER_PATIENCE = 1.0
 WHISPER_SILENCE_THRESHOLD = 2.0
 
+WHISPER_LANGUAGES = {'cantonese': 'yue', '粵語': 'yue', '廣東話': 'yue', 'yue-hant': 'yue', 'cantonese-hk': 'yue'}
+QWEN3_LANGUAGES = {'yue': 'Cantonese', 'yue-hant': 'Cantonese', '粵語': 'Cantonese', '廣東話': 'Cantonese'}
+
+
+def whisper_language(language: str | None) -> str | None:
+    if not language:
+        return None
+    return WHISPER_LANGUAGES.get(language.strip().lower(), language)
+
+
+def qwen3_language(language: str | None) -> str | None:
+    if not language:
+        return None
+    return QWEN3_LANGUAGES.get(language.strip().lower(), language)
+
 
 class AsrEngine(Protocol):
     name: str
@@ -41,7 +56,7 @@ class Qwen3Engine:
 
     def __init__(self, model: str, language: str | None, hotwords: str | None = None):
         self.model_name = model or QWEN3_MODEL
-        self.language = language
+        self.language = qwen3_language(language)
         self.system_prompt = hotwords or None
         self.model = _module('mlx_audio.stt', 'asr-mlx').load(self.model_name)
 
@@ -59,7 +74,7 @@ class FasterWhisperEngine:
 
     def __init__(self, model: str, language: str | None, hotwords: str | None = None):
         self.model_name = model or WHISPER_MODEL
-        self.language = language
+        self.language = whisper_language(language)
         self.hotwords = hotwords
         module = _module('faster_whisper', 'asr-whisper')
         self.model = module.WhisperModel(self.model_name, device='auto', compute_type='int8', download_root=ASR_MODEL_DIR or None)

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from src.apps import ROUTERS
+from src.apps import routers as app_routers
 from src.apps import tasks as tasks_app
 from src.config import API_PREFIX, DOCS_URL, OPENAPI_URL, REDOC_URL, TASKS_ENABLED
 from src.middleware import setup_cors, setup_exception_handlers
@@ -27,7 +27,7 @@ def create_fastapi_app():
     setup_cors(app)
     setup_exception_handlers(app)
 
-    for router in ROUTERS:
+    for router in app_routers():
         api.include_router(router)
 
     app.include_router(api)
