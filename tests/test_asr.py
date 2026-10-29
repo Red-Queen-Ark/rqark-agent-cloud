@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from src.app import create_fastapi_app
 from src.apps.asr import engine as engine_module
 from src.apps.asr import routes as routes_module
-from src.apps.asr.engines import build_engine
+from src.apps.asr.engines import build_engine, qwen3_language, whisper_language
 from src.apps.asr.errors import AsrBusyError, AsrTimeoutError, AsrUnavailableError
 from src.middleware.auth import get_current_user
 
@@ -145,6 +145,21 @@ def test_get_engine_loads_once(monkeypatch):
     assert first is second
     assert built == [engine_module.ASR_ENGINE]
     engine_module.reset()
+
+
+def test_cantonese_maps_to_a_whisper_code():
+    assert whisper_language('Cantonese') == 'yue'
+    assert whisper_language('yue') == 'yue'
+    assert whisper_language('en') == 'en'
+    assert whisper_language('') is None
+    assert whisper_language(None) is None
+
+
+def test_yue_maps_to_the_qwen3_language_name():
+    assert qwen3_language('yue') == 'Cantonese'
+    assert qwen3_language('Cantonese') == 'Cantonese'
+    assert qwen3_language('en') == 'en'
+    assert qwen3_language(None) is None
 
 
 def test_unknown_engine_is_rejected():
