@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.apps.asr import engine as asr_engine
+from src.apps.asr.errors import AsrBusyError
 from src.apps.chat.helper import authenticate
 from src.apps.voice import vad, wake
 from src.apps.voice.protocol import error_event, final_event, ready_event, started_event, wake_event
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 LISTENING = 'listening'
 CAPTURING = 'capturing'
+ASR_BUSY_ATTEMPTS = 10
+ASR_BUSY_DELAY = 0.5
 
 
 class _Connection:
@@ -125,10 +128,21 @@ class _Connection:
             self.gated = await self.rearm_async()
         return True
 
+    async def _transcribe_with_patience(self, segment: vad.Segment) -> str:
+        for attempt in range(ASR_BUSY_ATTEMPTS):
+            try:
+                return await asr_engine.transcribe(segment.samples)
+            except AsrBusyError:
+                if attempt + 1 >= ASR_BUSY_ATTEMPTS:
+                    raise
+                logger.info('voice transcription queued user=%s attempt=%d', self.user_id, attempt + 1)
+                await asyncio.sleep(ASR_BUSY_DELAY)
+        raise AsrBusyError('the transcriber is still busy')
+
     async def transcribe(self, segment: vad.Segment) -> bool:
         started = time.monotonic()
         try:
-            text = await asr_engine.transcribe(segment.samples)
+            text = await self._transcribe_with_patience(segment)
         except Exception as error:
             logger.warning('voice transcription failed user=%s error=%s', self.user_id, error)
             code = getattr(error, 'code', 'ASR_ERROR')

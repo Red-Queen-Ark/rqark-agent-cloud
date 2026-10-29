@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from src.apps.asr.errors import AsrTimeoutError
+from src.apps.asr.errors import AsrBusyError, AsrTimeoutError
 from src.apps.voice import service as service_module
 from src.apps.voice import vad, wake
 from src.apps.voice.protocol import wake_event
@@ -460,6 +460,24 @@ async def test_a_transcription_failure_keeps_the_socket_open(monkeypatch):
     assert conn.sent[-2]['error']['code'] == 'ASR_TIMEOUT'
     assert conn.sent[-1] == {'type': 'started'}
     assert conn.close_code is None
+
+
+async def test_a_busy_transcriber_is_waited_out_instead_of_failing(monkeypatch):
+    make_env(monkeypatch, segmenter=fake_segmenter(voiced_frames=3, silence_ms=1000, min_ms=30))
+    monkeypatch.setattr(service_module, 'ASR_BUSY_DELAY', 0)
+    calls = []
+
+    async def busy_once(samples):
+        calls.append(samples)
+        if len(calls) == 1:
+            raise AsrBusyError('the asr queue is full')
+        return '你好'
+
+    monkeypatch.setattr(service_module.asr_engine, 'transcribe', busy_once)
+    conn = await run([pcm(vad.FRAME_SIZE * 3), '{"type":"stop"}'])
+
+    assert conn.sent[-1]['type'] == 'final'
+    assert len(calls) == 2
 
 
 async def test_cancel_drops_the_audio(monkeypatch):
