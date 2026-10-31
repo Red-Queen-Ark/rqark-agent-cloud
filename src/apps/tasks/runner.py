@@ -15,7 +15,7 @@ from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
 
 from src.apps.sandbox import swap_agent
 from src.apps.sandbox.workspace import Workspace
-from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, INTERNAL_TOKEN, SANDBOX_IMAGE, TASK_RUN_TIMEOUT, TASK_STREAM_MAX_CHARS, WORKSPACE_START_TIMEOUT
+from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, INTERNAL_TOKEN, SANDBOX_ENABLED, SANDBOX_IMAGE, TASK_RUN_TIMEOUT, TASK_STREAM_MAX_CHARS, WORKSPACE_START_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class LocalStream:
                 self._append(str(chunk.content))
 
 
-def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace, dict[str, object]]:
+def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace | None, dict[str, object]]:
     try:
         agent = _build_agent(run.agent_def)
     except (KeyError, ValueError) as error:
@@ -145,8 +145,9 @@ def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace,
     except (KeyError, TypeError, ValueError) as error:
         raise RunnerError('PROVIDER_NOT_FOUND') from error
 
-    workspace = Workspace(run.user_id, image=SANDBOX_IMAGE)
-    swap_agent(agent, workspace)
+    workspace = Workspace(run.user_id, image=SANDBOX_IMAGE) if SANDBOX_ENABLED else None
+    if workspace is not None:
+        swap_agent(agent, workspace)
 
     client = RQArkDataCloudClient(CloudConfig(url=DATA_CLOUD_URL, api_key=run.actor_token), timeout=DATA_CLOUD_TIMEOUT)
     storage = CloudStorage(client, source=TASK_SOURCE)
@@ -168,8 +169,10 @@ async def _close_client(extras: dict[str, object] | None) -> None:
         logger.exception('cannot close the data cloud client')
 
 
-async def _build_and_open(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace, dict[str, object]]:
+async def _build_and_open(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace | None, dict[str, object]]:
     agent, app, storage, workspace, extras = _build_app(run)
+    if workspace is None:
+        return agent, app, storage, workspace, extras
     try:
         await asyncio.wait_for(workspace.ensure(), WORKSPACE_START_TIMEOUT)
     except TimeoutError as error:

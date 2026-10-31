@@ -2,7 +2,6 @@ from fastapi import APIRouter
 
 from .chat.routes import router as chat_router
 from .ping.routes import router as ping_router
-from .workspace.routes import router as workspace_router
 
 
 def routers() -> list[APIRouter]:
@@ -13,9 +12,14 @@ def routers() -> list[APIRouter]:
     """
     from src import config
 
-    if not config.SPEECH_ENABLED:
-        return [chat_router, ping_router, workspace_router]
-    from .asr.routes import router as asr_router
-    from .voice.routes import router as voice_router
+    mounted = [chat_router, ping_router]
+    if config.SPEECH_ENABLED:
+        from .asr.routes import router as asr_router
+        from .voice.routes import router as voice_router
 
-    return [asr_router, chat_router, ping_router, voice_router, workspace_router]
+        mounted = [asr_router, chat_router, ping_router, voice_router]
+    if config.SANDBOX_ENABLED:
+        from .workspace.routes import router as workspace_router
+
+        mounted.append(workspace_router)
+    return mounted

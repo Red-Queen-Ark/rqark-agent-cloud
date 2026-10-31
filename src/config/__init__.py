@@ -78,6 +78,7 @@ VOICE_REDIS = _bool_env('VOICE_REDIS', 'true')
 VOICE_LEASE_TTL = _int_env('VOICE_LEASE_TTL', '360')
 
 # Sandbox
+SANDBOX_ENABLED = _bool_env('SANDBOX_ENABLED', 'true')
 SANDBOX_IMAGE = os.getenv('SANDBOX_IMAGE', 'ubuntu:24.04')
 WORKSPACE_MAX_BYTES = _int_env('WORKSPACE_MAX_BYTES', str(100 * 1024 * 1024))
 WORKSPACE_START_TIMEOUT = float(os.getenv('WORKSPACE_START_TIMEOUT', '30'))

@@ -21,7 +21,7 @@ from src.apps.chat.event import RoomStream, connect_agent_event_to_room
 from src.apps.chat.scope import room_key
 from src.apps.sandbox import swap_agent
 from src.apps.sandbox.workspace import Workspace
-from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE
+from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_ENABLED, SANDBOX_IMAGE
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ class ChatHelper:
         self.token = token or ''
         self.user_id = user_id
         self.room = room_key(user_id, session_id)
-        self.workspace = Workspace(user_id, image=SANDBOX_IMAGE)
+        self.workspace: Workspace | None = Workspace(user_id, image=SANDBOX_IMAGE) if SANDBOX_ENABLED else None
         self._token_generation = 0
         self.client = _build_client(token)
         self.client.on_unauthorized = self._wait_for_fresh_token
@@ -187,9 +187,10 @@ class ChatHelper:
         if provider is None:
             logger.error('provider not found session=%s provider=%s', self.session_id, provider_name)
             raise DataCloudError(404, 'PROVIDER_NOT_FOUND', f'provider not found: {provider_name}')
-        await self.workspace.ensure()
         agent = _build_agent(agent_info)
-        swap_agent(agent, self.workspace)
+        if self.workspace is not None:
+            await self.workspace.ensure()
+            swap_agent(agent, self.workspace)
         app = AgentApp(providers, self.storage())
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
         stream = await connect_agent_event_to_room(app, self.room)
