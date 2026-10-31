@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import Awaitable
+from typing import TypeVar
 from uuid import uuid4
 
 from redis.asyncio import Redis
@@ -13,6 +15,8 @@ _RENEW = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expir
 _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
 _CALL_TIMEOUT = 10.0
+
+_T = TypeVar('_T')
 
 
 class LeaderLease:
@@ -65,8 +69,8 @@ class LeaderLease:
                 logger.exception('task lease worker failed, staying idle key=%s', self._key)
                 self._leader = False
 
-    async def _call(self, coro: object) -> object:
-        return await asyncio.wait_for(coro, self._timeout)  # type: ignore[arg-type]
+    async def _call(self, awaitable: Awaitable[_T]) -> _T:
+        return await asyncio.wait_for(awaitable, self._timeout)
 
     async def _attempt(self) -> None:
         try:

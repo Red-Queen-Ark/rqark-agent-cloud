@@ -1,5 +1,7 @@
 import json
 import logging
+from collections.abc import Awaitable
+from typing import cast
 
 from src.utils.redis import get_redis
 
@@ -43,7 +45,7 @@ async def record(room: str, payload: dict) -> dict:
         return payload
     try:
         seq_key = _seq_key(room)
-        seq = await redis.incr(seq_key)
+        seq = await cast('Awaitable[int]', redis.incr(seq_key))
         await redis.expire(seq_key, _SEQ_TTL)
         stamped = {**payload, 'seq': seq}
         key = _key(room)
