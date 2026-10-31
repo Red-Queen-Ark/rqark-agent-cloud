@@ -145,8 +145,9 @@ class FakeApp:
     async def write_turn_memory(self, *, session_id, source, session, extras=None, allow_state_update=True):
         self.turn_writes.append({'session_id': session_id, 'source': source, 'session': session, 'extras': extras, 'allow_state_update': allow_state_update})
 
-    async def chat(self, content, agent, session_id=None, extras=None):
+    async def chat(self, content, agent, session_id=None, images=None, extras=None):
         self.chats.append(content)
+        self.images = list(images) if images else []
         if FakeApp.behavior is not None:
             await FakeApp.behavior(self)
         await self.session_mgr.save(session_id or 's1')
@@ -785,3 +786,21 @@ async def test_a_failed_compact_leaves_the_conversation_alone(helper_env, monkey
 
     assert len(FakeApp.last.compactor.summaries) == 1
     assert [message.content for message in FakeApp.last.session_mgr.sessions_map['s1'].history] == ['first', 'answer', 'second']
+
+
+async def test_images_reach_the_app_and_survive_a_cancelled_turn(helper_env):
+    uri = 'data:image/png;base64,AAAA'
+
+    async def behavior(app):
+        app.stream.content.extend(['par', 'tial'])
+        raise asyncio.CancelledError()
+
+    FakeApp.behavior = behavior
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(asyncio.CancelledError):
+        await helper.chat('hi', 'p', 'a', images=[uri])
+
+    assert FakeApp.last.images == [uri]
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert session.history[0].images == [uri]

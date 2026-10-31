@@ -32,6 +32,10 @@ DATA_CLOUD_TIMEOUT = float(os.getenv('DATA_CLOUD_TIMEOUT', '30'))
 CHAT_IDLE_TIMEOUT = float(os.getenv('CHAT_IDLE_TIMEOUT', '900'))
 CHAT_IDLE_CHECK = float(os.getenv('CHAT_IDLE_CHECK', '5'))
 
+# Images
+IMAGE_MAX_BYTES = _int_env('IMAGE_MAX_BYTES', str(5 * 1024 * 1024))
+IMAGE_MAX_PER_MESSAGE = _int_env('IMAGE_MAX_PER_MESSAGE', '4')
+
 # Tasks
 INTERNAL_TOKEN = os.getenv('INTERNAL_TOKEN', '0a3be1ef5e090053bf78701be8c0fefdc955e5e878d26eed3ed1e26a0f5e9080')
 TASK_RUN_TIMEOUT = float(os.getenv('TASK_RUN_TIMEOUT', '600'))

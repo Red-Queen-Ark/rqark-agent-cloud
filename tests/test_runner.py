@@ -31,14 +31,16 @@ class FakeHelper:
         self.token = token
         self.user_id = user_id
         self.calls: list[tuple] = []
+        self.images: list[list[str]] = []
         self.updated_tokens: list[str | None] = []
         self.closed = False
         self.started = asyncio.Event()
         self.persisted = False
         FakeHelper.instances.append(self)
 
-    async def chat(self, content, provider, agent):
+    async def chat(self, content, provider, agent, images=None):
         self.calls.append((content, provider, agent))
+        self.images.append(list(images) if images else [])
         self.started.set()
         if FakeHelper.behavior is not None:
             await FakeHelper.behavior(self, content, provider, agent)

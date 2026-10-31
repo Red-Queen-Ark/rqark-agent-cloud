@@ -5,6 +5,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from src.apps.chat.event import error_event
 from src.apps.chat.helper import authenticate, authorize_session
+from src.apps.chat.images import normalize
 from src.apps.chat.room import has_clients, join, leave
 from src.apps.chat.runner import ChatCommand, acquire_runner, request_retire
 from src.apps.chat.scope import room_key
@@ -46,8 +47,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     logger.info('websocket token refreshed session=%s', session_id)
                     await runner.update_token(info.get('token'))
                 else:
-                    logger.info('websocket chat submitted session=%s provider=%s agent=%s', session_id, info.get('provider'), info.get('agent'))
-                    runner.submit(ChatCommand(info['content'], info['provider'], info['agent']))
+                    images = normalize(info.get('images'))
+                    logger.info('websocket chat submitted session=%s provider=%s agent=%s images=%d', session_id, info.get('provider'), info.get('agent'), len(images))
+                    runner.submit(ChatCommand(info['content'], info['provider'], info['agent'], images))
             except (ValueError, KeyError, TypeError) as error:
                 logger.warning('websocket invalid frame session=%s error=%s', session_id, error)
                 await websocket.send_json(error_event(str(error)))

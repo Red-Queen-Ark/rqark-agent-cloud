@@ -141,9 +141,9 @@ class ChatHelper:
             return None
         return {CLIENT_KEY: self.client, AGENT_KEY: agent_id, SOURCE_KEY: SOURCE}
 
-    async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str) -> None:
+    async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str, images: list[str] | None = None) -> None:
         if len(session.history) <= saved:
-            session.history.append(UserMessage(content))
+            session.history.append(UserMessage(content, images=list(images) if images else []))
         # The loop may already have saved a tool-call iteration of this turn, in
         # which case the history grew past `saved` and the text the user watched
         # was never written. Append it unless the turn already ends with it.
@@ -175,8 +175,9 @@ class ChatHelper:
         )
         return True
 
-    async def chat(self, content: str, provider_name: str, agent_name: str) -> Session:
+    async def chat(self, content: str, provider_name: str, agent_name: str, images: list[str] | None = None) -> Session:
         self.persisted = False
+        images = list(images) if images else []
         agents = await self.client.list_agents()
         agent_info = next((info for info in agents if info.get('name') == agent_name), None)
         if agent_info is None:
@@ -206,22 +207,22 @@ class ChatHelper:
         needs_title = bool(content) and not session.title
         saved = len(session.history)
         expanded = await self._expand_sop(content)
-        logger.info('chat request session=%s provider=%s agent=%s context=%d', self.session_id, provider_name, agent_name, saved)
+        logger.info('chat request session=%s provider=%s agent=%s context=%d images=%d', self.session_id, provider_name, agent_name, saved, len(images))
         extras = self.extras(agent_info.get('id'))
         try:
             async with asyncio.timeout(CHAT_IDLE_TIMEOUT) as idle:
                 watchdog = asyncio.create_task(_watch_progress(stream, idle))
                 try:
-                    await app.chat(expanded, agent, session_id=self.session_id, extras=extras)
+                    await app.chat(expanded, agent, session_id=self.session_id, images=images, extras=extras)
                 finally:
                     watchdog.cancel()
                     await asyncio.gather(watchdog, return_exceptions=True)
         except TimeoutError as error:
             logger.error('chat stalled session=%s idle=%.0fs', self.session_id, CHAT_IDLE_TIMEOUT)
-            await self._save_partial(app, session, saved, expanded, stream.text)
+            await self._save_partial(app, session, saved, expanded, stream.text, images)
             raise RuntimeError('chat stalled: no progress') from error
         except asyncio.CancelledError:
-            await self._save_partial(app, session, saved, expanded, stream.text)
+            await self._save_partial(app, session, saved, expanded, stream.text, images)
             raise
         self.persisted = True
         if needs_title:

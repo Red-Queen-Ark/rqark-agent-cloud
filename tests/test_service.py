@@ -146,3 +146,24 @@ async def test_token_frame_adopts_the_fresh_token_without_chatting(monkeypatch, 
     assert runner.tokens == ['fresh']
     assert runner.submitted == []
     assert retired == [('s11', 'u1')]
+
+
+async def test_a_frame_carries_its_images_into_the_turn(monkeypatch, room_env):
+    runner, _retired = make_env(monkeypatch)
+    uri = 'data:image/png;base64,' + __import__('base64').b64encode(b'\x89PNG\r\n\x1a\n' + b'\x00' * 32).decode()
+    conn = FakeConn(['{"kind":"chat","content":"look","provider":"p","agent":"a","images":["' + uri + '"]}'])
+
+    await service_module.chat_websocket(conn, 's12')
+
+    assert len(runner.submitted) == 1
+    assert runner.submitted[0].images == [uri]
+
+
+async def test_a_bad_image_is_reported_without_starting_a_turn(monkeypatch, room_env):
+    runner, _retired = make_env(monkeypatch)
+    conn = FakeConn(['{"kind":"chat","content":"look","provider":"p","agent":"a","images":["https://example.com/a.png"]}'])
+
+    await service_module.chat_websocket(conn, 's13')
+
+    assert runner.submitted == []
+    assert conn.sent and 'image 1' in conn.sent[0]['payload']['content']

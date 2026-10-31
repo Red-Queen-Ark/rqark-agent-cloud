@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 
 from src.apps.chat.event import error_event
@@ -21,6 +21,7 @@ class ChatCommand:
     content: str
     provider: str
     agent: str
+    images: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -97,7 +98,7 @@ class SessionRunner:
         started = monotonic()
         logger.info('chat started room=%s provider=%s agent=%s', self.room, command.provider, command.agent)
         try:
-            await self._helper.chat(command.content, command.provider, command.agent)
+            await self._helper.chat(command.content, command.provider, command.agent, images=command.images)
         except asyncio.CancelledError:
             logger.warning('chat cancelled room=%s elapsed=%.1fs', self.room, monotonic() - started)
             raise
