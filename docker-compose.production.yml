@@ -3,9 +3,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.production
-      secrets:
-        - uv_index_username
-        - uv_index_password
     environment:
       - DATA_CLOUD_URL=http://server:7302
       - REDIS_SERVER=redis
@@ -35,9 +32,3 @@ networks:
   rqark-project:
     name: rqark-project
     external: true
-
-secrets:
-  uv_index_username:
-    environment: REGISTRY_USERNAME
-  uv_index_password:
-    environment: REGISTRY_PASSWORD

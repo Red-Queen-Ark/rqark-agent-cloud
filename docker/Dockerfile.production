@@ -15,11 +15,7 @@ WORKDIR /app
 
 # Layer caching: install dependencies first (without project)
 COPY pyproject.toml uv.lock README.md ./
-RUN --mount=type=secret,id=uv_index_username \
-    --mount=type=secret,id=uv_index_password \
-    UV_INDEX_GITEA_USERNAME="$(cat /run/secrets/uv_index_username)" \
-    UV_INDEX_GITEA_PASSWORD="$(cat /run/secrets/uv_index_password)" \
-    uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source code
 COPY main.py ./
@@ -30,11 +26,7 @@ COPY docker/entrypoint.sh docker/entrypoint.sh
 RUN chmod +x docker/entrypoint.sh
 
 # Install the project itself
-RUN --mount=type=secret,id=uv_index_username \
-    --mount=type=secret,id=uv_index_password \
-    UV_INDEX_GITEA_USERNAME="$(cat /run/secrets/uv_index_username)" \
-    UV_INDEX_GITEA_PASSWORD="$(cat /run/secrets/uv_index_password)" \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 
