@@ -62,8 +62,9 @@ Prerequisites：
 3. `SANDBOX_IMAGE` 兩個 compose file 都有 expose，可以 `SANDBOX_IMAGE=... docker compose up`。
 
 現階段 `ubuntu:24.04` = 冇 git / node / uv，所以 `exec` / 讀寫檔 / grep / list_dir 正常，
-clone / `npm i` / `uv sync` 唔得。要全套功能就 build `docker/Dockerfile.sandbox`
-再指 `SANDBOX_IMAGE=rqark-sandbox:latest`，唔使改 code。
+clone / `npm i` / `uv sync` 唔得。要全套功能就自己 build 一個有 git / node / uv 嘅
+image，再指 `SANDBOX_IMAGE=rqark-sandbox:latest`，唔使改 code。repo 已經冇 ship
+sandbox Dockerfile。
 
 ## 沙盒幾時建立
 
@@ -96,8 +97,8 @@ Plan：reaper 掃 `rqark.sandbox=1` label 停 idle 容器（volume 要保留）�
 
 ### Sandbox image
 
-`SANDBOX_IMAGE` 預設 `ubuntu:24.04`（`docker/Dockerfile.sandbox` 已寫，未 build；build 完將
-`SANDBOX_IMAGE` 指過去就得）。`ubuntu:24.04` 冇 git / node / uv，clone 會回
+`SANDBOX_IMAGE` 預設 `ubuntu:24.04`。repo 已經冇 ship sandbox Dockerfile，要全套功能
+就自己 build 一個再將 `SANDBOX_IMAGE` 指過去。`ubuntu:24.04` 冇 git / node / uv，clone 會回
 `Clone failed: git command not found in the sandbox image`（exit 127 已 map）。
 
 如果用 apt 就要 `cap_add=['DAC_OVERRIDE','SETUID','SETGID']`（實測：單加
