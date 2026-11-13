@@ -22,6 +22,7 @@ User 透過 HTTP 瀏覽 / 操作自己 agent 沙盒嘅 `/workspace`。
 |---|---|---|
 | GET | `/api/workspace/list?path=&show_hidden=false` | `{path, entries[]}`；預設隱藏 dotfiles |
 | GET | `/api/workspace/stat?path=` | 單一 entry metadata |
+| GET | `/api/workspace/complete?query=&limit=50` | `@` picker completion; `{entries[]}` |
 | GET | `/api/workspace/file?path=` | 下載；`Content-Type` 由副檔名推，`Content-Length` 有齊 |
 | GET | `/api/workspace/archive?path=` | 目錄 / 檔案打包 zip（stream） |
 | POST | `/api/workspace/upload?path=<dir>&overwrite=true` | multipart，field name **`files`**，可多檔 |
@@ -37,6 +38,14 @@ Entry shape：
 ```
 
 `type` = `file` / `dir` / `link` / `other`；`target` 只有 symlink 有值。
+
+## Completion
+
+`/complete` mirrors the terminal client's `@` behaviour. The query splits at its last
+slash: the part before it picks the directory, the rest is a case-insensitive basename
+prefix. Search stops at depth 8 and skips `.git`, `node_modules`, `dist`, `build` and the
+other directories the sandbox already ignores. A missing directory returns an empty list
+instead of an error, because the query is still being typed.
 
 ## 限制
 

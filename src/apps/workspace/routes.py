@@ -44,6 +44,10 @@ class MoveRequest(BaseModel):
     new_path: str
 
 
+class CompleteModel(BaseModel):
+    entries: list[EntryModel]
+
+
 def _workspace(user: dict) -> Workspace:
     user_id = str(user.get('id') or '')
     if not user_id:
@@ -82,6 +86,15 @@ async def list_directory(user: User, path: str = Query(default=''), show_hidden:
     await _ready(workspace)
     entries = await asyncio.to_thread(workspace.list_dir, path, show_hidden)
     return ListModel(path=workspace.relative(path), entries=[EntryModel.of(entry) for entry in entries])
+
+
+@router.get('/complete', response_model=CompleteModel)
+async def complete_paths(user: User, query: str = Query(default=''), limit: int = Query(default=50, ge=1, le=200)):
+    """Basename-prefix completion for the `@` file picker in the chat input."""
+    workspace = _workspace(user)
+    await _ready(workspace)
+    entries = await asyncio.to_thread(workspace.complete, query, limit)
+    return CompleteModel(entries=[EntryModel.of(entry) for entry in entries])
 
 
 @router.get('/stat', response_model=EntryModel)

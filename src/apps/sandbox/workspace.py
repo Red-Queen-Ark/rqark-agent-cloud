@@ -323,6 +323,9 @@ def _lock(name: str) -> threading.Lock:
 class Workspace:
     WORKDIR: str = '/workspace'
     RESERVED_NETWORKS: frozenset[str] = frozenset({'none', 'host', 'bridge'})
+    COMPLETE_MAX_DEPTH: int = 8
+    COMPLETE_OUTPUT_BYTES: int = 256 * 1024
+    COMPLETE_IGNORED: tuple[str, ...] = ('.git', '.hg', '.svn', '.venv', 'venv', '__pycache__', 'node_modules', 'dist', 'build', '.tox', '.rqark-tmp')
 
     def __init__(self, user_id: str, image: str = 'ubuntu:24.04', network: str | None = None, memory: str = '1g', nano_cpus: int = 1_000_000_000, pids_limit: int = 256, cap_add: Sequence[str] = ()):
         self.user_id = user_id
@@ -448,6 +451,45 @@ class Workspace:
             entries.append(Entry(name=name, path=entry_path, type=_TYPES.get(kind, 'other'), size=int(size or 0), mtime=float(mtime or 0), target=target or None))
         entries.sort(key=lambda entry: (entry.type != 'dir', entry.name.lower()))
         return entries
+
+    @staticmethod
+    def _glob_escape(text: str) -> str:
+        """Escapes find's `-iname` metacharacters so typed text stays literal."""
+        return ''.join(f'\\{char}' if char in '*?[]\\' else char for char in text)
+
+    def complete(self, query: str | None, limit: int = 50) -> list[Entry]:
+        """Paths whose basename starts with the text after the last `/`.
+
+        Mirrors the terminal client: the part before the last slash picks the
+        directory to search, the rest is a case-insensitive basename prefix.
+        Missing directories yield no rows rather than an error, because the
+        query is still being typed.
+        """
+        raw = (query or '').strip()
+        if raw.startswith('/'):
+            raise PathOutsideWorkspaceError('absolute paths are not allowed')
+        base, _, needle = raw.rpartition('/')
+        try:
+            directory = self.resolve(base)
+        except FileMissingError:
+            return []
+        ignores = ' -o '.join(f'-name {shlex.quote(name)}' for name in self.COMPLETE_IGNORED)
+        pattern = f'{self._glob_escape(needle)}*'
+        script = f"find {shlex.quote(directory)} -mindepth 1 -maxdepth {self.COMPLETE_MAX_DEPTH} \\( {ignores} \\) -prune -o -iname {shlex.quote(pattern)} -printf '%y\\0%s\\0%T@\\0%l\\0%P\\0' | head -c {self.COMPLETE_OUTPUT_BYTES}"
+        result = self._raw(script)
+        if result.exit_code != 0:
+            return []
+        fields = result.stdout.split('\0')
+        base_path = self.relative(base)
+        entries: list[Entry] = []
+        for index in range(0, len(fields) - 4, 5):
+            kind, size, mtime, target, rel = fields[index : index + 5]
+            if not rel:
+                continue
+            path = posixpath.join(base_path, rel) if base_path else rel
+            entries.append(Entry(name=posixpath.basename(rel), path=path, type=_TYPES.get(kind, 'other'), size=int(size or 0), mtime=float(mtime or 0), target=target or None))
+        entries.sort(key=lambda entry: (entry.type != 'dir', entry.name.lower(), entry.path.lower()))
+        return entries[:limit]
 
     def read_text_file(self, path: str | None, limit: int = REDACT_MAX_BYTES) -> tuple[bytes, Entry]:
         container_path = self.resolve(path)

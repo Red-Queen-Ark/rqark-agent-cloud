@@ -36,6 +36,9 @@ class FakeWorkspace:
     def stat(self, path):
         return entry()
 
+    def complete(self, query, limit=50):
+        return [entry('main.py', 'src/main.py'), entry('src', 'src', 'dir', 4096)]
+
     def open_file(self, path):
         return entry(), iter([b'abc'])
 
@@ -146,6 +149,62 @@ def test_stat_route(client):
     response = client.get('/api/workspace/stat?path=a.txt', headers=HEADERS)
     assert response.status_code == 200
     assert response.json()['path'] == 'a.txt'
+
+
+def test_complete_route_returns_matching_paths(client):
+    response = client.get('/api/workspace/complete?query=src/ma', headers=HEADERS)
+    assert response.status_code == 200
+    assert [item['path'] for item in response.json()['entries']] == ['src/main.py', 'src']
+
+
+def test_complete_splits_the_directory_from_the_needle():
+    workspace = Workspace('u1')
+    seen = {}
+
+    def raw(script, cwd=None):
+        seen['script'] = script
+        return type('R', (), {'exit_code': 0, 'stdout': 'f\x003\x001700000000.0\x00\x00main.py\x00d\x004096\x001700000000.0\x00\x00src\x00', 'stderr': ''})()
+
+    workspace.resolve = lambda path, strict=True: '/workspace/src'
+    workspace._raw = raw
+    entries = workspace.complete('src/ma')
+    assert [item.path for item in entries] == ['src/src', 'src/main.py']
+    assert "/workspace/src" in seen['script']
+    assert '-iname' in seen['script']
+    assert "'ma*'" in seen['script']
+
+
+def test_complete_sorts_directories_first_and_honours_the_limit():
+    workspace = Workspace('u1')
+    output = 'f\x003\x001700000000.0\x00\x00main.py\x00d\x004096\x001700000000.0\x00\x00mine\x00f\x003\x001700000000.0\x00\x00more.py\x00'
+    workspace.resolve = lambda path, strict=True: '/workspace'
+    workspace._raw = lambda script, cwd=None: type('R', (), {'exit_code': 0, 'stdout': output, 'stderr': ''})()
+    assert [item.path for item in workspace.complete('m')] == ['mine', 'main.py', 'more.py']
+    assert [item.path for item in workspace.complete('m', limit=2)] == ['mine', 'main.py']
+
+
+def test_complete_escapes_glob_metacharacters():
+    workspace = Workspace('u1')
+    seen = {}
+
+    def raw(script, cwd=None):
+        seen['script'] = script
+        return type('R', (), {'exit_code': 0, 'stdout': '', 'stderr': ''})()
+
+    workspace.resolve = lambda path, strict=True: '/workspace'
+    workspace._raw = raw
+    assert workspace.complete('a*b') == []
+    assert "\\*b*" in seen['script']
+
+
+def test_complete_returns_nothing_for_a_missing_directory():
+    workspace = Workspace('u1')
+
+    def missing(path, strict=True) -> str:
+        raise FileMissingError(path)
+
+    workspace.resolve = missing
+    assert workspace.complete('nope/x') == []
 
 
 def test_download_streams_the_file(client):
