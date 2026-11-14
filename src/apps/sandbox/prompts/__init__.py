@@ -1,16 +1,22 @@
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
+from rqark_core.prompts import WorkspacePrompt as CoreWorkspacePrompt
 from rqark_core.types.prompt import BasePrompt
 
 from src.apps.sandbox.prompts.agents_md import AgentsMdPrompt
 from src.apps.sandbox.prompts.git_project import GitProjectPrompt
 from src.apps.sandbox.prompts.platform import PlatformPrompt
-from src.apps.sandbox.prompts.workspace import WorkspacePrompt
 from src.apps.sandbox.workspace import Workspace
 
-__all__ = ['AgentsMdPrompt', 'GitProjectPrompt', 'PROMPTS', 'PlatformPrompt', 'WorkspacePrompt', 'swap_prompts']
+__all__ = ['AgentsMdPrompt', 'GitProjectPrompt', 'PROMPTS', 'PlatformPrompt', 'swap_prompts']
 
-PROMPTS: dict[str, Callable[[Workspace], BasePrompt]] = {'AgentsMdPrompt': AgentsMdPrompt, 'GitProjectPrompt': GitProjectPrompt, 'PlatformPrompt': lambda workspace: PlatformPrompt(), 'WorkspacePrompt': WorkspacePrompt}
+PROMPTS: dict[str, Callable[[Workspace], BasePrompt]] = {
+    'AgentsMdPrompt': AgentsMdPrompt,
+    'GitProjectPrompt': GitProjectPrompt,
+    'PlatformPrompt': lambda workspace: PlatformPrompt(),
+    'WorkspacePrompt': lambda workspace: CoreWorkspacePrompt(Path(workspace.workdir)),
+}
 
 
 def swap_prompts(prompts: Sequence[BasePrompt], workspace: Workspace) -> list[BasePrompt]:

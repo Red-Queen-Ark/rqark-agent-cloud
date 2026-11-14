@@ -18,17 +18,37 @@
 
 ### Prompt
 
-`src/apps/sandbox/prompts.py`。四個 core prompt 有沙盒版，API 同 core 對齊
+`src/apps/sandbox/prompts/`。兩個 core prompt 有沙盒版，API 同 core 對齊
 （`priority` 一樣、`params()` 回 `{}`，`to_dict()['name']` 唔變，config 相容）：
 
 | Core | 沙盒 |
 |---|---|
-| `AgentsMdPrompt` | `cat /workspace/AGENTS.md`，唔存在回 `None` |
-| `GitProjectPrompt` | 喺 `/workspace` 跑 git，輸出格式同 core 一致（含 40 行 truncate） |
+| `AgentsMdPrompt` | `cat <workdir>/AGENTS.md`，唔存在回 `None` |
+| `GitProjectPrompt` | 喺 `<workdir>` 跑 git，輸出格式同 core 一致（含 40 行 truncate） |
 | `PlatformPrompt` | 固定講「Linux in a Docker container，`/bin/sh`」（core 用 `sys.platform`，dev 喺 macOS 會講錯） |
-| `WorkspacePrompt` | `Current workspace: /workspace` |
+| `WorkspacePrompt` | 直接重用 core 版，只係傳入 `<workdir>`（core 只做字串格式化，唔需要入容器） |
+
+`<workdir>` 係 session 所屬 project 嘅目錄（見下節），冇 project 時等於 `/workspace`。
 
 靜態嗰啲（`AntiSycophancy` / `Character` / `DateTime` / `Role` / `SubAgent`）唔換。
+
+`WorkspacePrompt` 要重建實例而唔可以原樣留：agent 身上嗰個係 `_build_prompt` 用空 params
+建出嚟，`cwd` 已經定型為 agent-cloud 進程目錄。
+
+### Project
+
+一個 project 係 data-cloud 入面 `(project_name, project_path)`，`project_path` 係相對
+`/workspace` 嘅子目錄。Session 可以有 `project_id`，`NULL` 就係喺 `/workspace` 工作。
+
+- `Workspace` 有兩個錨：`WORKDIR` 固定係 `/workspace`（volume 掛載點、路徑界限），
+  `workdir` 係 project 目錄，`WORKDIR` 或 `WORKDIR/<project_path>`。
+- 相對路徑一律由 `workdir` 解析；絕對路徑仍然接受，但必須喺 `WORKDIR` 之內。
+- `subdir=''` 時所有解析結果同以前一樣，冇 project 嘅 session 行為不變。
+- `ChatHelper.chat()` 喺 build agent 之前讀 session metadata、查 project、設
+  `workspace.subdir`，再 `ensure()`。`ensure()` 會 `mkdir -p` 個 project 目錄。
+- project 已刪（`404`）就當冇 project，喺 `/workspace` 繼續，唔會令成個 turn 失敗。
+- `tasks/runner.py` 唔跟 project：task 冇 `project_id`，維持 `/workspace`。
+- `/api/workspace/*` 收 `project_id` query；冇帶就係整個 volume，同以前一樣。
 
 ### Session 綁 owner
 

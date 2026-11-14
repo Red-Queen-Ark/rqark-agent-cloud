@@ -26,7 +26,7 @@ class FakeWorkspace:
             raise self.error
 
     def relative(self, path):
-        return Workspace.api_path(path).removeprefix('/workspace/').removeprefix('/workspace')
+        return Workspace('u1').api_path(path).removeprefix('/workspace/').removeprefix('/workspace')
 
     def list_dir(self, path, show_hidden=False):
         if self.error:
@@ -82,9 +82,9 @@ def client(monkeypatch):
 def test_api_path_rejects_unsafe_paths():
     for path in ('/etc/passwd', '..', 'a/../../b', 'a\x00b'):
         with pytest.raises(PathOutsideWorkspaceError):
-            Workspace.api_path(path)
-    assert Workspace.api_path('') == '/workspace'
-    assert Workspace.api_path('docs/./a.txt') == '/workspace/docs/a.txt'
+            Workspace('u1').api_path(path)
+    assert Workspace('u1').api_path('') == '/workspace'
+    assert Workspace('u1').api_path('docs/./a.txt') == '/workspace/docs/a.txt'
 
 
 def test_api_path_is_relative_to_the_workspace():
@@ -169,7 +169,7 @@ def test_complete_splits_the_directory_from_the_needle():
     workspace._raw = raw
     entries = workspace.complete('src/ma')
     assert [item.path for item in entries] == ['src/src', 'src/main.py']
-    assert "/workspace/src" in seen['script']
+    assert '/workspace/src' in seen['script']
     assert '-iname' in seen['script']
     assert "'ma*'" in seen['script']
 
@@ -194,7 +194,7 @@ def test_complete_escapes_glob_metacharacters():
     workspace.resolve = lambda path, strict=True: '/workspace'
     workspace._raw = raw
     assert workspace.complete('a*b') == []
-    assert "\\*b*" in seen['script']
+    assert '\\*b*' in seen['script']
 
 
 def test_complete_returns_nothing_for_a_missing_directory():

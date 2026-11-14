@@ -2,7 +2,7 @@ import pytest
 
 from src.apps.sandbox.tools import WORKSPACE_TOOLS, convert_document
 from src.apps.sandbox.tools.convert_document import ConvertDocument
-from src.apps.sandbox.workspace import FileMissingError, FileTooLargeError
+from src.apps.sandbox.workspace import FileMissingError, FileTooLargeError, Workspace
 
 
 class FakeWorkspace:
@@ -12,6 +12,13 @@ class FakeWorkspace:
         self.files = files or {}
         self.error = error
         self.written: dict[str, bytes] = {}
+
+    @property
+    def workdir(self) -> str:
+        return self.WORKDIR
+
+    def to_container_path(self, path: str | None, default: str = '.') -> str:
+        return Workspace('u1').to_container_path(path, default)
 
     async def read_bytes(self, path: str) -> bytes:
         if self.error:
