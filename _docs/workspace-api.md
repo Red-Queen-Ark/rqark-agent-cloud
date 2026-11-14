@@ -10,11 +10,23 @@ User 透過 HTTP 瀏覽 / 操作自己 agent 沙盒嘅 `/workspace`。
 
 ## 路徑規則
 
-- `path` 一律係**相對** `/workspace`，例如 `docs/a.txt`；省略 = workspace root。
+- `path` 一律係**相對**工作目錄，例如 `docs/a.txt`；省略 = 工作目錄本身。
+  工作目錄預設係 `/workspace`，帶 `project_id` 時係該 project 嘅目錄。
 - 拒收：absolute path（`/etc`）、任何 `..` segment、null byte → `400 INVALID_PATH`。
 - Server 會喺容器內 `realpath -e` resolve，確認結果仍然 under `/workspace`；
   symlink 指去容器其他地方（例如 `ln -s /etc escape`）→ `400 INVALID_PATH`。
 - `delete` / `move` 唔跟隨最後一段 symlink（`rm` / `mv` 本身都唔跟），所以可以刪走上面嗰條 `escape`。
+- 回傳嘅 `path` 一律相對於工作目錄：project session 上 `list?path=` 列出 project 根目錄，
+  上唔到 project 以外。
+
+## Project
+
+每個 endpoint 都收 `project_id` query（data-cloud 嘅 project uuid）：
+
+- 帶 `project_id`：工作目錄收窄到該 project，路徑相對於 project 根目錄。
+- 唔帶：工作目錄仍然係 `/workspace`，即整個 volume，同以前一樣。
+
+`project_id` 對應唔到 caller 嘅 project 時，data-cloud 回 `404`，agent-cloud 原樣轉回。
 
 ## Endpoints
 

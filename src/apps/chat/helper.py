@@ -20,6 +20,7 @@ from rqark_core.types.tool import PlanItem
 from src.apps.chat.event import RoomStream, connect_agent_event_to_room
 from src.apps.chat.scope import room_key
 from src.apps.sandbox import swap_agent
+from src.apps.sandbox.project import load_project, project_subdir
 from src.apps.sandbox.workspace import Workspace
 from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_ENABLED, SANDBOX_IMAGE
 
@@ -156,12 +157,8 @@ class ChatHelper:
         await asyncio.shield(app.session_mgr.save(session.uuid))
         self.persisted = True
 
-    async def _load_session(self, manager: SessionManager) -> bool:
-        try:
-            info = await self.client.get_session(self.session_id)
-        except DataCloudError as error:
-            if error.status_code != 404:
-                raise
+    async def _load_session(self, manager: SessionManager, info: dict | None) -> bool:
+        if info is None:
             logger.warning('session not found session=%s', self.session_id)
             return False
         messages = await self.client.list_session_messages(self.session_id)
@@ -175,19 +172,41 @@ class ChatHelper:
         )
         return True
 
+    async def _session_info(self) -> dict | None:
+        """The stored session metadata, or None when the cloud does not have it."""
+        try:
+            return await self.client.get_session(self.session_id)
+        except DataCloudError as error:
+            if error.status_code != 404:
+                raise
+            return None
+
+    async def _apply_project(self, info: dict | None) -> None:
+        """Points the workspace at the directory the session's project names.
+
+        Done before the agent is built so that the prompts, which read the
+        workspace, describe the directory the agent actually works in.
+        """
+        if self.workspace is None:
+            return
+        project = await load_project(self.client, (info or {}).get('project_id'), session_id=self.session_id)
+        self.workspace.subdir = project_subdir(project)
+
     async def chat(self, content: str, provider_name: str, agent_name: str, images: list[str] | None = None) -> Session:
         self.persisted = False
         images = list(images) if images else []
         agents = await self.client.list_agents()
-        agent_info = next((info for info in agents if info.get('name') == agent_name), None)
+        agent_info = next((agent for agent in agents if agent.get('name') == agent_name), None)
         if agent_info is None:
             logger.error('agent not found session=%s agent=%s', self.session_id, agent_name)
             raise DataCloudError(404, 'AGENT_NOT_FOUND', f'agent not found: {agent_name}')
-        providers = [_build_provider(info) for info in await self.client.list_providers()]
+        providers = [_build_provider(provider_info) for provider_info in await self.client.list_providers()]
         provider = next((p for p in providers if p.name == provider_name), None)
         if provider is None:
             logger.error('provider not found session=%s provider=%s', self.session_id, provider_name)
             raise DataCloudError(404, 'PROVIDER_NOT_FOUND', f'provider not found: {provider_name}')
+        info = await self._session_info()
+        await self._apply_project(info)
         agent = _build_agent(agent_info)
         if self.workspace is not None:
             await self.workspace.ensure()
@@ -196,7 +215,7 @@ class ChatHelper:
         app.provider_mgr.switch_to(app.provider_mgr.providers.index(provider))
         stream = await connect_agent_event_to_room(app, self.room)
 
-        if not await self._load_session(app.session_mgr):
+        if not await self._load_session(app.session_mgr, info):
             logger.error('chat refused for a missing session session=%s', self.session_id)
             raise DataCloudError(404, 'SESSION_NOT_FOUND', f'session not found: {self.session_id}')
         session = await app.session_mgr.get_or_create(self.session_id)
@@ -255,7 +274,7 @@ class ChatHelper:
 
     async def revert(self, message_id: str) -> Session | None:
         manager = SessionManager(CloudStorage(self.client, source=SOURCE, list_source=SOURCE))
-        if not await self._load_session(manager):
+        if not await self._load_session(manager, await self._session_info()):
             logger.warning('refusing to revert a missing session session=%s', self.session_id)
             return None
         session = manager.sessions_map.get(self.session_id)

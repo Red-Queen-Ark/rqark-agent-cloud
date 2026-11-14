@@ -29,11 +29,11 @@ class WorkspaceTool(BaseTool):
         self.workspace = workspace
 
     def container_path(self, path: str | None, default: str = '.') -> str:
-        return Workspace.to_container_path(path, default)
+        return self.workspace.to_container_path(path, default)
 
     def file_path(self, path: str | None, default: str = '.') -> str:
-        resolved = Workspace.to_container_path(path, default)
-        if resolved == self.workspace.WORKDIR:
+        resolved = self.workspace.to_container_path(path, default)
+        if resolved == self.workspace.workdir:
             raise WorkspaceError(f'path must point at a file: {path or default}')
         return resolved
 

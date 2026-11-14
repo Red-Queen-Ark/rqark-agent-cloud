@@ -74,6 +74,29 @@ def _text(data: bytes | None) -> str:
     return data.decode('utf-8', errors='replace') if data else ''
 
 
+def _clean_subdir(subdir: str | None) -> str:
+    """Normalises a project path into a form safe to join onto WORKDIR.
+
+    A project's path arrives from data cloud, where it was validated on write.
+    It is checked again here because this is the layer that turns it into a
+    filesystem path: an absolute path, a ".." segment or a NUL would otherwise
+    let a project reach outside the volume.
+    """
+    raw = (subdir or '').strip()
+    if not raw:
+        return ''
+    if '\x00' in raw:
+        raise PathOutsideWorkspaceError('project path contains a null byte')
+    if raw.startswith('/'):
+        raise PathOutsideWorkspaceError('project path must be relative')
+    parts = [part for part in raw.split('/') if part not in ('', '.')]
+    if '..' in parts:
+        raise PathOutsideWorkspaceError('project path must not contain ".."')
+    if not parts:
+        return ''
+    return '/'.join(parts)
+
+
 class _IteratorReader(io.RawIOBase):
     """Adapts docker's chunk iterator into a file object, so tar reads it lazily."""
 
@@ -327,7 +350,7 @@ class Workspace:
     COMPLETE_OUTPUT_BYTES: int = 256 * 1024
     COMPLETE_IGNORED: tuple[str, ...] = ('.git', '.hg', '.svn', '.venv', 'venv', '__pycache__', 'node_modules', 'dist', 'build', '.tox', '.rqark-tmp')
 
-    def __init__(self, user_id: str, image: str = 'ubuntu:24.04', network: str | None = None, memory: str = '1g', nano_cpus: int = 1_000_000_000, pids_limit: int = 256, cap_add: Sequence[str] = ()):
+    def __init__(self, user_id: str, image: str = 'ubuntu:24.04', network: str | None = None, memory: str = '1g', nano_cpus: int = 1_000_000_000, pids_limit: int = 256, cap_add: Sequence[str] = (), subdir: str = ''):
         self.user_id = user_id
         self.image = image
         self.network = network
@@ -335,6 +358,26 @@ class Workspace:
         self.nano_cpus = nano_cpus
         self.pids_limit = pids_limit
         self.cap_add = tuple(cap_add)
+        self._subdir = ''
+        self._workdir_ready = False
+        self.subdir = subdir
+
+    @property
+    def subdir(self) -> str:
+        """The project's directory relative to WORKDIR, or '' for the root."""
+        return self._subdir
+
+    @subdir.setter
+    def subdir(self, value: str | None) -> None:
+        cleaned = _clean_subdir(value)
+        if cleaned != self._subdir:
+            self._workdir_ready = False
+        self._subdir = cleaned
+
+    @property
+    def workdir(self) -> str:
+        """The directory relative paths resolve against and the agent works in."""
+        return Workspace.WORKDIR if not self._subdir else f'{Workspace.WORKDIR}/{self._subdir}'
 
     @property
     def name(self) -> str:
@@ -357,17 +400,15 @@ class Workspace:
     def network_name(self) -> str:
         return f'{self.name}-net'
 
-    @staticmethod
-    def to_container_path(path: str | None, default: str = '.') -> str:
+    def to_container_path(self, path: str | None, default: str = '.') -> str:
         raw = (path or default).strip() or default
-        joined = raw if raw.startswith('/') else posixpath.join(Workspace.WORKDIR, raw)
+        joined = raw if raw.startswith('/') else posixpath.join(self.workdir, raw)
         normalized = posixpath.normpath(joined)
         if normalized != Workspace.WORKDIR and not normalized.startswith(Workspace.WORKDIR + '/'):
             raise PathOutsideWorkspaceError(f'path outside workspace: {raw}')
         return normalized
 
-    @staticmethod
-    def api_path(path: str | None) -> str:
+    def api_path(self, path: str | None) -> str:
         raw = (path or '').strip()
         if '\x00' in raw:
             raise PathOutsideWorkspaceError('path contains a null byte')
@@ -376,22 +417,21 @@ class Workspace:
         parts = [part for part in raw.split('/') if part not in ('', '.')]
         if '..' in parts:
             raise PathOutsideWorkspaceError('path traversal is not allowed')
-        return posixpath.join(Workspace.WORKDIR, *parts)
+        return posixpath.join(self.workdir, *parts)
 
     @classmethod
     def _inside(cls, path: str) -> bool:
         return path == cls.WORKDIR or path.startswith(cls.WORKDIR + '/')
 
-    @classmethod
-    def _relative(cls, container_path: str) -> str:
-        return '' if container_path == cls.WORKDIR else posixpath.relpath(container_path, cls.WORKDIR)
+    def _relative(self, container_path: str) -> str:
+        return '' if container_path == self.workdir else posixpath.relpath(container_path, self.workdir)
 
     def relative(self, path: str | None) -> str:
         return self._relative(self.api_path(path))
 
     def resolve(self, path: str | None, *, strict: bool = True) -> str:
         raw = self.api_path(path)
-        if raw == self.WORKDIR:
+        if raw == self.workdir:
             probe = raw
         else:
             probe = raw if strict else posixpath.dirname(raw)
@@ -401,7 +441,7 @@ class Workspace:
         resolved = result.stdout.strip()
         if not self._inside(resolved):
             raise PathOutsideWorkspaceError(f'path escapes workspace: {path}')
-        if raw == self.WORKDIR:
+        if raw == self.workdir:
             return resolved
         if strict:
             return resolved
@@ -415,7 +455,7 @@ class Workspace:
         if len(fields) < 4:
             raise WorkspaceError('unexpected output from sandbox')
         kind, size, mtime, target = fields[:4]
-        name = '' if container_path == self.WORKDIR else posixpath.basename(container_path)
+        name = '' if container_path == self.workdir else posixpath.basename(container_path)
         return Entry(name=name, path=self._relative(container_path), type=_TYPES.get(kind, 'other'), size=int(size or 0), mtime=float(mtime or 0), target=target or None)
 
     def _optional(self, container_path: str) -> Entry | None:
@@ -526,7 +566,7 @@ class Workspace:
         total = entry.size if entry.type == 'file' else self._tree_size(container_path)
         if total > WORKSPACE_MAX_BYTES:
             raise FileTooLargeError(f'archive is too large: {entry.path or "."}')
-        name = (posixpath.basename(container_path) if container_path != self.WORKDIR else 'workspace') or 'workspace'
+        name = (posixpath.basename(container_path) if container_path != self.workdir else 'workspace') or 'workspace'
         container = self._ensure()
         try:
             stream, _ = container.get_archive(container_path)
@@ -589,15 +629,15 @@ class Workspace:
 
     def put(self, path: str | None, source: IO[bytes], size: int, *, overwrite: bool = True, if_unmodified_since: float | None = None) -> Entry:
         raw = self.api_path(path)
-        if raw == self.WORKDIR:
+        if raw == self.workdir:
             raise InvalidOperationError('target must be a file inside the workspace')
         directory = self._relative(posixpath.dirname(raw))
         return self.put_file('' if directory == '.' else directory, posixpath.basename(raw), source, size, overwrite=overwrite, if_unmodified_since=if_unmodified_since)
 
     def mkdir(self, path: str | None) -> Entry:
         raw = self.api_path(path)
-        if raw == self.WORKDIR:
-            return self._stat(self.WORKDIR)
+        if raw == self.workdir:
+            return self._stat(self.workdir)
         target = self.resolve(path, strict=False)
         existing = self._optional(target)
         if existing is not None and existing.type != 'dir':
@@ -613,10 +653,10 @@ class Workspace:
 
     def move(self, path: str | None, new_path: str | None, *, overwrite: bool = False) -> Entry:
         source = self.resolve(path, strict=False)
-        if source == self.WORKDIR:
+        if source == self.workdir:
             raise InvalidOperationError('cannot move the workspace root')
         target = self.resolve(new_path, strict=False)
-        if target == self.WORKDIR:
+        if target == self.workdir:
             raise InvalidOperationError('cannot replace the workspace root')
         if source == target:
             return self._stat(source)
@@ -632,7 +672,7 @@ class Workspace:
 
     def delete(self, path: str | None) -> None:
         target = self.resolve(path, strict=False)
-        if target == self.WORKDIR:
+        if target == self.workdir:
             raise InvalidOperationError('cannot delete the workspace root')
         result = self._raw(f'rm -rf -- {shlex.quote(target)}')
         if result.exit_code != 0:
@@ -681,7 +721,7 @@ class Workspace:
                 cap_add=list(self.cap_add),
                 security_opt=['no-new-privileges'],
                 volumes={volume.name: {'bind': self.WORKDIR, 'mode': 'rw'}},
-                working_dir=self.WORKDIR,
+                working_dir=self.workdir,
                 labels={'rqark.sandbox': '1', 'rqark.user': self.user_id},
                 **self._connection(client),
             )
@@ -705,24 +745,29 @@ class Workspace:
         try:
             container.start()
             return container
-        except (APIError, DockerException):
+        except APIError, DockerException:
             try:
                 container.remove(force=True)
-            except (APIError, DockerException):
+            except APIError, DockerException:
                 pass
             return self._create(client)
 
     def _ensure(self) -> Container:
         client = _client_instance()
         with _lock(self.container_name):
-            return self._container(client)
+            container = self._container(client)
+            if self._subdir and not self._workdir_ready:
+                result = self._exec(container, f'mkdir -p -- {shlex.quote(self.workdir)}')
+                if result.exit_code != 0:
+                    raise WorkspaceError(f'cannot create project directory: {result.stderr.strip()}')
+                self._workdir_ready = True
+        return container
 
-    def _raw(self, script: str, cwd: str | None = None) -> ShellResult:
+    def _exec(self, container: Container, script: str, cwd: str | None = None) -> ShellResult:
         stream = None
         try:
-            container = self._ensure()
             api = _client_instance().api
-            exec_id = api.exec_create(container.id, cmd=['/bin/sh', '-c', script], workdir=cwd or self.WORKDIR)['Id']
+            exec_id = api.exec_create(container.id, cmd=['/bin/sh', '-c', script], workdir=cwd or self.workdir)['Id']
             stream = api.exec_start(exec_id, stream=True, demux=True)
             stdout, stderr, truncated = _drain_capped(stream, WORKSPACE_SHELL_MAX_BYTES)
             info = api.exec_inspect(exec_id)
@@ -735,6 +780,9 @@ class Workspace:
         if truncated:
             out += f'\n… (output truncated at {WORKSPACE_SHELL_MAX_BYTES} bytes)'
         return ShellResult(exit_code if exit_code is not None else -1, out, _text(stderr))
+
+    def _raw(self, script: str, cwd: str | None = None) -> ShellResult:
+        return self._exec(self._ensure(), script, cwd)
 
     def run_shell(self, command: str, cwd: str | None = None, timeout: int = 60, interpreter: str = '/bin/sh') -> ShellResult:
         return self._raw(f'exec timeout -k 5 {timeout} {interpreter} -c {shlex.quote(command)}', cwd)
@@ -776,7 +824,7 @@ class Workspace:
 
     def _write_bytes(self, path: str, data: bytes) -> None:
         container = self._ensure()
-        parent = posixpath.dirname(path) or self.WORKDIR
+        parent = posixpath.dirname(path) or self.workdir
         self._raw(f'mkdir -p {shlex.quote(parent)}')
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode='w') as tar:
@@ -799,7 +847,7 @@ class Workspace:
             return
         try:
             container.stop(timeout=5)
-        except (APIError, DockerException):
+        except APIError, DockerException:
             pass
 
     async def remove(self) -> None:
@@ -811,7 +859,7 @@ class Workspace:
             return
         try:
             container.remove(force=True)
-        except (APIError, DockerException):
+        except APIError, DockerException:
             pass
 
     async def purge(self) -> None:
@@ -825,11 +873,11 @@ class Workspace:
             return
         try:
             client.volumes.get(self.name).remove(force=True)
-        except (APIError, DockerException, NotFound):
+        except APIError, DockerException, NotFound:
             pass
         try:
             client.networks.get(self.network_name).remove()
-        except (APIError, DockerException, NotFound):
+        except APIError, DockerException, NotFound:
             pass
 
     def _find(self) -> Container | None:

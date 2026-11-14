@@ -18,12 +18,13 @@ class FakeConfig:
 
 class FakeClient:
     sops: list[dict] = []
+    projects: dict[str, dict] = {}
 
     def __init__(self, token):
         self.config = FakeConfig(token)
         self.calls: list[str] = []
         self.closed = False
-        self.session_info: dict | None = {'id': 's1', 'title': '', 'plan_items': [], 'created_at': '2026-01-01T00:00:00+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'}
+        self.session_info: dict | None = {'id': 's1', 'title': '', 'project_id': None, 'plan_items': [], 'created_at': '2026-01-01T00:00:00+00:00', 'updated_at': '2026-01-01T00:00:00+00:00'}
         self.messages: list[dict] = []
         self.get_session_error: DataCloudError | None = None
         self.updated: dict | None = None
@@ -49,6 +50,12 @@ class FakeClient:
     async def list_session_messages(self, uuid):
         self.calls.append('list_session_messages')
         return self.messages
+
+    async def get_project(self, uuid):
+        self.calls.append('get_project')
+        if uuid not in type(self).projects:
+            raise DataCloudError(404, 'NOT_FOUND', 'Project not found.')
+        return type(self).projects[uuid]
 
     async def list_sessions(self, source=None):
         self.calls.append('list_sessions')
@@ -159,6 +166,7 @@ def helper_env(monkeypatch):
     FakeApp.behavior = None
     FakeApp.fail_save = False
     FakeClient.sops = []
+    FakeClient.projects = {}
     FakeCompactor.summary = 'a summary'
     monkeypatch.setattr(helper_module, '_build_client', FakeClient)
     monkeypatch.setattr(helper_module, '_build_provider', FakeProvider)
@@ -804,3 +812,49 @@ async def test_images_reach_the_app_and_survive_a_cancelled_turn(helper_env):
     assert FakeApp.last.images == [uri]
     session = FakeApp.last.session_mgr.sessions_map['s1']
     assert session.history[0].images == [uri]
+
+
+async def test_a_session_in_a_project_works_in_that_directory(helper_env):
+    FakeClient.projects = {'p1': {'id': 'p1', 'project_name': 'acme', 'project_path': 'acme/api'}}
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    helper.client.session_info['project_id'] = 'p1'
+
+    await helper.chat('hi', 'p', 'a')
+
+    assert helper.workspace is not None
+    assert helper.workspace.subdir == 'acme/api'
+    assert helper.workspace.workdir == '/workspace/acme/api'
+
+
+async def test_a_session_without_a_project_stays_at_the_root(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('hi', 'p', 'a')
+
+    assert helper.workspace is not None
+    assert helper.workspace.subdir == ''
+    assert helper.client.calls == ['list_agents', 'list_providers', 'get_session', 'list_session_messages', 'list_sops']
+
+
+async def test_a_project_the_cloud_no_longer_has_falls_back_to_the_root(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    helper.client.session_info['project_id'] = 'gone'
+
+    await helper.chat('hi', 'p', 'a')
+
+    assert helper.workspace is not None
+    assert helper.workspace.subdir == ''
+
+
+async def test_the_workspace_follows_a_repointed_session(helper_env):
+    FakeClient.projects = {'p1': {'id': 'p1', 'project_name': 'acme', 'project_path': 'acme'}}
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    helper.client.session_info['project_id'] = 'p1'
+    await helper.chat('hi', 'p', 'a')
+
+    FakeClient.projects = {'p2': {'id': 'p2', 'project_name': 'other', 'project_path': 'other'}}
+    helper.client.session_info['project_id'] = 'p2'
+    await helper.chat('again', 'p', 'a')
+
+    assert helper.workspace is not None
+    assert helper.workspace.subdir == 'other'

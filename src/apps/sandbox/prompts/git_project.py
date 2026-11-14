@@ -13,13 +13,13 @@ class GitProjectPrompt(BasePrompt):
         self.workspace = workspace
 
     async def _git(self, args: list[str]) -> str | None:
-        result = await self.workspace.shell(shlex.join(['git', *args]), cwd=self.workspace.WORKDIR, timeout=10)
+        result = await self.workspace.shell(shlex.join(['git', *args]), cwd=self.workspace.workdir, timeout=10)
         if result.exit_code != 0:
             return None
         return result.stdout.strip() or None
 
     async def _is_git_project(self) -> bool:
-        marker = shlex.quote(self.workspace.WORKDIR + '/.git')
+        marker = shlex.quote(self.workspace.workdir + '/.git')
         result: ShellResult = await self.workspace.shell(f'[ -d {marker} ]')
         return result.exit_code == 0
 
