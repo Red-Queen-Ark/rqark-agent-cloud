@@ -2,7 +2,7 @@ services:
   agent-cloud:
     build:
       context: .
-      dockerfile: docker/Dockerfile.production
+      dockerfile: docker/Dockerfile
     environment:
       - DATA_CLOUD_URL=http://server:7302
       - REDIS_SERVER=redis
