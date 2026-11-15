@@ -8,9 +8,13 @@ services:
       - 8000:8000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - host.docker.internal:host-gateway
     env_file:
       - ./.env
     environment:
+      - DATA_CLOUD_URL=${DATA_CLOUD_URL_DOCKER:-http://host.docker.internal:7302}
+      - REDIS_SERVER=${REDIS_SERVER_DOCKER:-host.docker.internal}
       - SANDBOX_IMAGE=${SANDBOX_IMAGE:-ubuntu:24.04}
       - WORKSPACE_MAX_BYTES=${WORKSPACE_MAX_BYTES:-104857600}
       - WORKSPACE_START_TIMEOUT=${WORKSPACE_START_TIMEOUT:-30}
