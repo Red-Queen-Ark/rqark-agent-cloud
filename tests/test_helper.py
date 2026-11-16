@@ -404,6 +404,19 @@ async def test_session_is_loaded_with_two_requests(helper_env, monkeypatch):
     assert FakeApp.last.session_mgr.saved == ['s1']
 
 
+async def test_the_session_keeps_the_agent_it_was_talked_to_with(helper_env, monkeypatch):
+    def build(token):
+        client = FakeClient(token)
+        client.session_info['agent_id'] = 'agent-1'
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    await helper.chat('hi', 'p', 'a')
+
+    assert FakeApp.last.session_mgr.sessions_map['s1'].agent_id == 'agent-1'
+
+
 async def test_missing_session_is_refused_without_saving(helper_env, monkeypatch):
     seen: list[FakeClient] = []
 

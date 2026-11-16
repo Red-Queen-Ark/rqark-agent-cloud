@@ -167,6 +167,7 @@ class ChatHelper:
             created_at=parse_dt(info['created_at']),
             updated_at=parse_dt(info['updated_at']),
             title=info.get('title') or '',
+            agent_id=info.get('agent_id') or '',
             plan_items=[PlanItem(**item) for item in info.get('plan_items') or []],
             history=[message_from_dict(message['data']) for message in messages],
         )
