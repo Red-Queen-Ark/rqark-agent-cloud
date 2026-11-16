@@ -151,7 +151,9 @@ def _build_app(run: ClaimedRun) -> tuple[Any, AgentApp, CloudStorage, Workspace 
 
     client = RQArkDataCloudClient(CloudConfig(url=DATA_CLOUD_URL, api_key=run.actor_token), timeout=DATA_CLOUD_TIMEOUT)
     storage = CloudStorage(client, source=TASK_SOURCE)
-    app = AgentApp([provider], storage, cloud_client=None)
+    # The run's model calls go through the same proxy as a person's: the data
+    # cloud holds the provider key, and the run token is what the proxy accepts.
+    app = AgentApp([provider], storage, cloud_client=client)
     app.provider_mgr.switch_to(0)
 
     return agent, app, storage, workspace, {CLIENT_KEY: client, AGENT_KEY: str(run.agent_def.get('id') or ''), SOURCE_KEY: TASK_SOURCE}

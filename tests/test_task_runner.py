@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from rqark_app.cloud.client import DataCloudError
+from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
 
 from src.apps.tasks import runner as runner_module
 from src.apps.tasks.runner import ClaimedRun, InternalClient, RunnerError, execute
@@ -109,7 +109,9 @@ class FakeApp:
             await asyncio.sleep(30)
 
 
-class SpyDataCloudClient:
+class SpyDataCloudClient(RQArkDataCloudClient):
+    """A data cloud client that records its calls and never reaches the network."""
+
     instances: list['SpyDataCloudClient'] = []
 
     def __init__(self, config, timeout=30.0, transport=None):
@@ -314,7 +316,9 @@ async def test_the_runner_builds_its_client_from_the_run_token(monkeypatch):
     assert SpyDataCloudClient.instances[0].calls == []
     assert storage.source == 'TASK'
     assert app.provider_mgr.provider.name == 'openai'
-    assert app.cloud_client is None
+    # The run's model calls go through the data cloud proxy, so the provider's
+    # own key never leaves the data cloud.
+    assert app.cloud_client is SpyDataCloudClient.instances[0]
 
 
 async def test_the_sandbox_is_named_after_the_claiming_user(monkeypatch):
