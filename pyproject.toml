@@ -1,6 +1,6 @@
 [project]
 name = "rqark-agent-cloud"
-version = "0.16.0"
+version = "0.15.1"
 description = "Red Queen Ark Agent Cloud - 24/7 agent service with chat WebSocket API, scheduled tasks, ASR and sandbox"
 readme = "README.md"
 requires-python = ">=3.14"
