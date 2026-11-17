@@ -908,3 +908,49 @@ async def test_the_workspace_follows_a_repointed_session(helper_env):
 
     assert helper.workspace is not None
     assert helper.workspace.subdir == 'other'
+
+
+def replay_frames():
+    return [
+        {'agent_id': 'a', 'path': [], 'payload': UserMessage('hi', id='u-u').to_dict()},
+        {'agent_id': 'a', 'path': [], 'payload': {'type': 'content', 'content': 'par'}},
+        {'agent_id': 'a', 'path': [], 'payload': {'type': 'content', 'content': 'tial'}},
+    ]
+
+
+async def test_a_replayed_turn_is_stored_before_the_next_one(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    await helper.chat('again', 'p', 'a', replay=replay_frames())
+
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [type(message).__name__ for message in session.history] == ['UserMessage', 'AssistantMessage']
+    assert session.history[0].content == 'hi'
+    assert session.history[1].content == 'partial'
+    assert FakeApp.last.session_mgr.saved[0] == 's1'
+
+
+async def test_a_replayed_turn_the_storage_already_has_is_not_written_again(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    helper.client.messages = [
+        {'seq': 0, 'data': {'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}], 'id': 'u-u', 'created_at': '2026-01-01T00:00:00+00:00'}},
+        {'seq': 1, 'data': {'role': 'assistant', 'content': 'partial', 'id': 'a-a', 'created_at': '2026-01-01T00:00:00+00:00'}},
+    ]
+    await helper.chat('again', 'p', 'a', replay=replay_frames())
+
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert len(session.history) == 2
+    assert FakeApp.last.session_mgr.saved == ['s1']
+
+
+async def test_a_replayed_turn_is_added_after_the_one_the_user_finished(helper_env):
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+    helper.client.messages = [
+        {'seq': 0, 'data': {'role': 'user', 'content': [{'type': 'text', 'text': 'other'}], 'id': 'u-other', 'created_at': '2026-01-01T00:00:00+00:00'}},
+        {'seq': 1, 'data': {'role': 'assistant', 'content': 'answer', 'id': 'a-other', 'created_at': '2026-01-01T00:00:00+00:00'}},
+    ]
+    await helper.chat('again', 'p', 'a', replay=replay_frames())
+
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [message.id for message in session.history][:2] == ['u-other', 'a-other']
+    assert session.history[2].content == 'hi'
+    assert session.history[3].content == 'partial'
