@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from rqark_app.cloud.client import DataCloudError
 from rqark_app.types.session import Session, SummaryMessage
-from rqark_core.types.chat import AssistantMessage, UserMessage
+from rqark_core.types.chat import AssistantMessage, ToolCall, ToolMessage, UserMessage
 
 from src.apps.chat import event as event_module
 from src.apps.chat import helper as helper_module
@@ -106,6 +106,9 @@ class FakeSessionManager:
         self.sessions_map[session_id] = session
         return session
 
+    async def get(self, session_id):
+        return self.sessions_map.get(session_id)
+
     async def save(self, uuid):
         if self.fail_save:
             raise DataCloudError(0, 'REQUEST_FAILED', 'save boom')
@@ -152,11 +155,25 @@ class FakeApp:
     async def write_turn_memory(self, *, session_id, source, session, extras=None, allow_state_update=True):
         self.turn_writes.append({'session_id': session_id, 'source': source, 'session': session, 'extras': extras, 'allow_state_update': allow_state_update})
 
-    async def chat(self, content, agent, session_id=None, images=None, extras=None):
+    async def chat(self, content, agent, session_id=None, images=None, extras=None, partial=None):
         self.chats.append(content)
         self.images = list(images) if images else []
-        if FakeApp.behavior is not None:
-            await FakeApp.behavior(self)
+        session = await self.session_mgr.get(session_id or 's1')
+        prefix = session.get_last_chunk_for_chat() if session is not None else []
+        turn = [*prefix, UserMessage(content, images=list(images) if images else [])]
+        if partial is not None:
+            partial[:] = turn
+        try:
+            if FakeApp.behavior is not None:
+                await FakeApp.behavior(self)
+        except asyncio.CancelledError:
+            # The core hands back the turn it had built; a turn the loop already
+            # saved is longer than the prefix this fake started from.
+            if partial is not None:
+                grown = session.get_last_chunk_for_chat() if session is not None else []
+                base = grown if len(grown) > len(prefix) else turn
+                partial[:] = [*base, AssistantMessage(self.stream.text)] if self.stream.text else list(base)
+            raise
         await self.session_mgr.save(session_id or 's1')
 
 
@@ -349,6 +366,26 @@ async def test_cancelled_chat_rewrites_a_turn_the_app_already_grew(helper_env):
     session = FakeApp.last.session_mgr.sessions_map['s1']
     assert [message.content for message in session.history] == ['hi', 'whole']
     assert FakeApp.last.session_mgr.saved == ['s1']
+    assert helper.persisted is True
+
+
+async def test_a_stopped_tool_iteration_keeps_its_tool_records(helper_env):
+    async def behavior(app):
+        session = app.session_mgr.sessions_map['s1']
+        session.history.extend([UserMessage('hi'), AssistantMessage('', tool_calls=[ToolCall('c1', 'function', 'read_file', '{}')]), ToolMessage('c1', 'print(1)', 'read_file', '{}')])
+        app.stream.content.extend(['checking'])
+        raise asyncio.CancelledError()
+
+    FakeApp.behavior = behavior
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(asyncio.CancelledError):
+        await helper.chat('hi', 'p', 'a')
+
+    session = FakeApp.last.session_mgr.sessions_map['s1']
+    assert [type(message).__name__ for message in session.history] == ['UserMessage', 'AssistantMessage', 'ToolMessage', 'AssistantMessage']
+    assert session.history[2].content == 'print(1)'
+    assert session.history[3].content == 'checking'
     assert helper.persisted is True
 
 

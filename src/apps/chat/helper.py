@@ -14,7 +14,7 @@ from rqark_app.sop.manager import SopManager
 from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, SOURCE_KEY
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
-from rqark_core.types.chat import AssistantMessage, UserMessage
+from rqark_core.types.chat import Message, UserMessage
 from rqark_core.types.tool import PlanItem
 
 from src.apps.chat.event import RoomStream, connect_agent_event_to_room
@@ -91,11 +91,6 @@ async def authenticate(token: str | None) -> dict | None:
         await client.aclose()
 
 
-def _ends_with_answer(history: list, assistant: str) -> bool:
-    last = history[-1] if history else None
-    return isinstance(last, AssistantMessage) and last.content == assistant
-
-
 class ChatHelper:
     def __init__(self, session_id: str, token: str | None, user_id: str):
         self.session_id = session_id
@@ -142,15 +137,19 @@ class ChatHelper:
             return None
         return {CLIENT_KEY: self.client, AGENT_KEY: agent_id, SOURCE_KEY: SOURCE}
 
-    async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, assistant: str, images: list[str] | None = None) -> None:
-        if len(session.history) <= saved:
+    async def _save_partial(self, app: AgentApp, session: Session, saved: int, content: str, turn: list[Message], images: list[str] | None = None) -> None:
+        """Store a stopped turn as far as it got.
+
+        `turn` is the turn's own history, handed back by the core when the cancel
+        landed: the user message, every tool iteration it finished and the tool
+        calls it never got answers for. Keeping only the streamed text dropped the
+        entire tool record of a turn stopped inside a tool loop.
+        """
+        if turn:
+            session.update_history_to_last_chunk(turn)
+        elif len(session.history) <= saved:
             session.history.append(UserMessage(content, images=list(images) if images else []))
-        # The loop may already have saved a tool-call iteration of this turn, in
-        # which case the history grew past `saved` and the text the user watched
-        # was never written. Append it unless the turn already ends with it.
-        if assistant and not _ends_with_answer(session.history, assistant):
-            session.history.append(AssistantMessage(assistant))
-        logger.warning('saving partial session=%s loaded=%d streamed=%d', self.session_id, saved, len(assistant))
+        logger.warning('saving partial session=%s loaded=%d turn=%d', self.session_id, saved, len(turn))
         # Shielded because this runs from the cancellation path: the write is
         # the only copy of a turn the user already watched, so it has to be
         # allowed to finish and report whether it did.
@@ -226,6 +225,9 @@ class ChatHelper:
             return session
         needs_title = bool(content) and not session.title
         saved = len(session.history)
+        # Filled by the core if this turn is cancelled mid-flight: the stop and the
+        # idle timeout both arrive as a cancellation, so both paths read it.
+        partial: list[Message] = []
         expanded = await self._expand_sop(content)
         logger.info('chat request session=%s provider=%s agent=%s context=%d images=%d', self.session_id, provider_name, agent_name, saved, len(images))
         extras = self.extras(agent_info.get('id'))
@@ -233,16 +235,16 @@ class ChatHelper:
             async with asyncio.timeout(CHAT_IDLE_TIMEOUT) as idle:
                 watchdog = asyncio.create_task(_watch_progress(stream, idle))
                 try:
-                    await app.chat(expanded, agent, session_id=self.session_id, images=images, extras=extras)
+                    await app.chat(expanded, agent, session_id=self.session_id, images=images, extras=extras, partial=partial)
                 finally:
                     watchdog.cancel()
                     await asyncio.gather(watchdog, return_exceptions=True)
         except TimeoutError as error:
             logger.error('chat stalled session=%s idle=%.0fs', self.session_id, CHAT_IDLE_TIMEOUT)
-            await self._save_partial(app, session, saved, expanded, stream.text, images)
+            await self._save_partial(app, session, saved, expanded, partial, images)
             raise RuntimeError('chat stalled: no progress') from error
         except asyncio.CancelledError:
-            await self._save_partial(app, session, saved, expanded, stream.text, images)
+            await self._save_partial(app, session, saved, expanded, partial, images)
             raise
         self.persisted = True
         if needs_title:
