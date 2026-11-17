@@ -32,15 +32,17 @@ class FakeHelper:
         self.user_id = user_id
         self.calls: list[tuple] = []
         self.images: list[list[str]] = []
+        self.replays: list[list[dict]] = []
         self.updated_tokens: list[str | None] = []
         self.closed = False
         self.started = asyncio.Event()
         self.persisted = False
         FakeHelper.instances.append(self)
 
-    async def chat(self, content, provider, agent, images=None):
+    async def chat(self, content, provider, agent, images=None, replay=None):
         self.calls.append((content, provider, agent))
         self.images.append(list(images) if images else [])
+        self.replays.append(list(replay) if replay else [])
         self.started.set()
         if FakeHelper.behavior is not None:
             await FakeHelper.behavior(self, content, provider, agent)
@@ -71,6 +73,7 @@ class Env:
         self.clients = True
         self.published: list[dict] = []
         self.stops = 0
+        self.frames: list[dict] = []
 
     def errors(self):
         return [json.loads(json.dumps(item)) for item in self.published]
@@ -91,7 +94,11 @@ async def env(monkeypatch):
     async def fake_clear(session_id):
         return None
 
+    async def fake_read(session_id):
+        return list(state.frames)
+
     monkeypatch.setattr(runner_module, 'clear', fake_clear)
+    monkeypatch.setattr(runner_module, 'read', fake_read)
     monkeypatch.setattr(runner_module, 'ChatHelper', FakeHelper)
     monkeypatch.setattr(runner_module, 'listen_stop', never_stop)
     monkeypatch.setattr(runner_module, 'publish', fake_publish)
@@ -457,3 +464,31 @@ async def test_stop_keeps_the_replay_when_the_turn_was_not_stored(env, room_env,
 
     # Nothing stored this turn, so the replay is its only copy.
     assert await replay.read(room('s16')) == [{'n': 1, 'seq': 1}]
+
+
+async def test_a_turn_is_handed_the_replay_the_previous_process_left(env):
+    env.frames = [{'payload': {'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}], 'id': 'u'}}]
+    runner = await acquire('s17', 't')
+    runner.submit(ChatCommand('again', 'p', 'a'))
+    await wait_until(lambda: FakeHelper.instances and FakeHelper.instances[0].replays)
+
+    assert FakeHelper.instances[0].replays[0] == env.frames
+
+
+async def test_shutdown_stops_every_running_session(env):
+    first = await acquire('s18', 't')
+    second = await acquire('s19', 't')
+
+    async def behavior(self, content, provider, agent):
+        await asyncio.sleep(3600)
+
+    FakeHelper.behavior = behavior
+    first.submit(ChatCommand('hi', 'p', 'a'))
+    second.submit(ChatCommand('hi', 'p', 'a'))
+    await wait_until(lambda: all(instance.started.is_set() for instance in FakeHelper.instances))
+
+    await runner_module.shutdown(timeout=5)
+
+    assert first.busy() is False
+    assert second.busy() is False
+    assert error_messages(env).count('chat stopped') == 2

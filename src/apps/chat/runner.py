@@ -6,9 +6,10 @@ from time import monotonic
 from src.apps.chat.event import error_event
 from src.apps.chat.helper import ChatHelper
 from src.apps.chat.lock import ChatLock
-from src.apps.chat.replay import clear
+from src.apps.chat.replay import clear, read
 from src.apps.chat.room import broadcast_stop, has_clients, listen_stop, publish
 from src.apps.chat.scope import room_key
+from src.config import CHAT_SHUTDOWN_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +95,12 @@ class SessionRunner:
                     await publish(self.room, error_event(_BUSY))
 
     async def _chat_once(self, command: ChatCommand, lock: ChatLock) -> None:
+        frames = await read(self.room)
         await clear(self.room)
         started = monotonic()
         logger.info('chat started room=%s provider=%s agent=%s', self.room, command.provider, command.agent)
         try:
-            await self._helper.chat(command.content, command.provider, command.agent, images=command.images)
+            await self._helper.chat(command.content, command.provider, command.agent, images=command.images, replay=frames)
         except asyncio.CancelledError:
             logger.warning('chat cancelled room=%s elapsed=%.1fs', self.room, monotonic() - started)
             raise
@@ -176,3 +178,22 @@ def request_retire(session_id: str, user_id: str) -> None:
 def is_busy(session_id: str, user_id: str) -> bool:
     runner = _runners.get(room_key(user_id, session_id))
     return runner is not None and runner.busy()
+
+
+async def shutdown(timeout: float = CHAT_SHUTDOWN_TIMEOUT) -> None:
+    """Stop every running turn before the process goes away.
+
+    A deploy kills the worker under a running turn: the answer exists only as
+    replay frames, the storage never saw it, and the next process inherits
+    nothing. Stopping each runner is the same path a user's stop takes, so the
+    turn reaches the session and the conversation resumes from it.
+    """
+    runners = list(_runners.values())
+    if not runners:
+        return
+    logger.warning('stopping %d running sessions', len(runners))
+    try:
+        async with asyncio.timeout(timeout):
+            await asyncio.gather(*(session_runner._stop() for session_runner in runners), return_exceptions=True)
+    except TimeoutError:
+        logger.error('gave up stopping running sessions after %.1fs', timeout)

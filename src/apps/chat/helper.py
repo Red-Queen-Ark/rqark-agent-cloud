@@ -18,6 +18,7 @@ from rqark_core.types.chat import Message, UserMessage
 from rqark_core.types.tool import PlanItem
 
 from src.apps.chat.event import RoomStream, connect_agent_event_to_room
+from src.apps.chat.recover import turn_from_frames
 from src.apps.chat.scope import room_key
 from src.apps.sandbox import swap_agent
 from src.apps.sandbox.project import load_project, project_subdir
@@ -156,6 +157,30 @@ class ChatHelper:
         await asyncio.shield(app.session_mgr.save(session.uuid))
         self.persisted = True
 
+    async def _adopt_replay(self, app: AgentApp, session: Session, frames: list[dict]) -> None:
+        """Store a turn that no shutdown path got to write.
+
+        A worker that was killed rather than stopped leaves the answer in the
+        replay log and nowhere else: the next turn would be assembled from a
+        history that stops before it. The frames are folded back in first, so
+        the conversation continues from what the user actually saw.
+        """
+        turn = turn_from_frames(frames)
+        if not turn:
+            return
+        known = {message.id for message in session.history}
+        if turn[0].id in known:
+            if not session.history or session.history[-1].id != turn[0].id:
+                return
+            session.update_history_to_last_chunk(turn)
+        else:
+            session.history.extend(turn)
+        logger.warning('adopted a replayed turn session=%s frames=%d messages=%d', self.session_id, len(frames), len(turn))
+        try:
+            await app.session_mgr.save(session.uuid)
+        except Exception as error:
+            logger.warning('adopted turn not stored session=%s error=%s', self.session_id, error)
+
     async def _load_session(self, manager: SessionManager, info: dict | None) -> bool:
         if info is None:
             logger.warning('session not found session=%s', self.session_id)
@@ -192,7 +217,7 @@ class ChatHelper:
         project = await load_project(self.client, (info or {}).get('project_id'), session_id=self.session_id)
         self.workspace.subdir = project_subdir(project)
 
-    async def chat(self, content: str, provider_name: str, agent_name: str, images: list[str] | None = None) -> Session:
+    async def chat(self, content: str, provider_name: str, agent_name: str, images: list[str] | None = None, replay: list[dict] | None = None) -> Session:
         self.persisted = False
         images = list(images) if images else []
         agents = await self.client.list_agents()
@@ -219,6 +244,7 @@ class ChatHelper:
             logger.error('chat refused for a missing session session=%s', self.session_id)
             raise DataCloudError(404, 'SESSION_NOT_FOUND', f'session not found: {self.session_id}')
         session = await app.session_mgr.get_or_create(self.session_id)
+        await self._adopt_replay(app, session, replay or [])
         if content.strip() == COMPACT_COMMAND:
             await self._compact(app, session)
             self.persisted = True
@@ -297,6 +323,23 @@ class ChatHelper:
 
 
 _background_writes: set[asyncio.Task] = set()
+
+
+async def drain_writes(timeout: float) -> None:
+    """Wait for the turn records still in flight, up to timeout.
+
+    A task nobody awaits dies with the loop, which drops the memory of the last
+    turn of every session that was being answered when the deploy started.
+    """
+    pending = [task for task in _background_writes if not task.done()]
+    if not pending:
+        return
+    logger.warning('waiting for %d pending turn records', len(pending))
+    try:
+        async with asyncio.timeout(timeout):
+            await asyncio.gather(*pending, return_exceptions=True)
+    except TimeoutError:
+        logger.error('gave up waiting for turn records after %.1fs', timeout)
 
 
 def _record_turn(app: AgentApp, session: Session, extras: dict[str, object] | None) -> None:
