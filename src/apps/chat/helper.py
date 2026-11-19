@@ -16,13 +16,13 @@ from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
 from rqark_core.types.chat import Message, UserMessage
 from rqark_core.types.tool import PlanItem
+from rqark_sandbox import swap_agent
+from rqark_sandbox.project import load_project, project_subdir
+from rqark_sandbox.workspace import Workspace
 
 from src.apps.chat.event import RoomStream, connect_agent_event_to_room
 from src.apps.chat.recover import turn_from_frames
 from src.apps.chat.scope import room_key
-from src.apps.sandbox import swap_agent
-from src.apps.sandbox.project import load_project, project_subdir
-from src.apps.sandbox.workspace import Workspace
 from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_ENABLED, SANDBOX_IMAGE
 
 logger = logging.getLogger(__name__)

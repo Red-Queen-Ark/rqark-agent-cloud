@@ -12,9 +12,9 @@ from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, SOURCE_KEY
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import Session
 from rqark_core.types.chat import AssistantMessage, Chunk, UserMessage
+from rqark_sandbox import swap_agent
+from rqark_sandbox.workspace import Workspace
 
-from src.apps.sandbox import swap_agent
-from src.apps.sandbox.workspace import Workspace
 from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, INTERNAL_TOKEN, SANDBOX_ENABLED, SANDBOX_IMAGE, TASK_RUN_TIMEOUT, TASK_STREAM_MAX_CHARS, WORKSPACE_START_TIMEOUT
 
 logger = logging.getLogger(__name__)

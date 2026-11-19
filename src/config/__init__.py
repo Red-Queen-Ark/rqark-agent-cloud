@@ -1,5 +1,8 @@
 import os
 
+from rqark_sandbox.config import WORKSPACE_MAX_BYTES as WORKSPACE_MAX_BYTES
+from rqark_sandbox.config import WORKSPACE_SHELL_MAX_BYTES as WORKSPACE_SHELL_MAX_BYTES
+
 
 def _bool_env(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() == 'true'
@@ -89,6 +92,4 @@ VOICE_LEASE_TTL = _int_env('VOICE_LEASE_TTL', '360')
 # Sandbox
 SANDBOX_ENABLED = _bool_env('SANDBOX_ENABLED', 'true')
 SANDBOX_IMAGE = os.getenv('SANDBOX_IMAGE', 'ubuntu:24.04')
-WORKSPACE_MAX_BYTES = _int_env('WORKSPACE_MAX_BYTES', str(100 * 1024 * 1024))
 WORKSPACE_START_TIMEOUT = _float_env('WORKSPACE_START_TIMEOUT', '30')
-WORKSPACE_SHELL_MAX_BYTES = _int_env('WORKSPACE_SHELL_MAX_BYTES', str(8 * 1024 * 1024))

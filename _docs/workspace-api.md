@@ -1,7 +1,7 @@
 # Workspace API
 
 User 透過 HTTP 瀏覽 / 操作自己 agent 沙盒嘅 `/workspace`。
-實作：`src/apps/workspace/routes.py`（HTTP）、`src/apps/sandbox/workspace.py`（docker primitive）。
+實作：`src/apps/workspace/routes.py`（HTTP）、`rqark_sandbox/workspace.py`（docker primitive）。
 
 ## Auth
 

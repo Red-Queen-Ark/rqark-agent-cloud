@@ -2,9 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-from src.apps.asr.errors import AsrError
-from src.apps.sandbox.workspace import (
+from rqark_sandbox.workspace import (
     ConflictError,
     FileMissingError,
     FileTooLargeError,
@@ -16,6 +14,8 @@ from src.apps.sandbox.workspace import (
     WorkspaceError,
     WorkspaceNotReadyError,
 )
+
+from src.apps.asr.errors import AsrError
 from src.config import CORS_ALLOW_CREDENTIALS, CORS_ORIGINS
 from src.middleware.auth import AuthError
 

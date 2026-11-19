@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn>=0.49.0",
     "fastapi>=0.141.1",
     "rqark-app==0.13.1",
+    "rqark-sandbox==0.1.0",
     "rqark-core==0.5.3",
     "websockets>=17.1",
     "redis[hiredis]>=5.2.0",
