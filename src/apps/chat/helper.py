@@ -120,14 +120,6 @@ class ChatHelper:
         logger.info('chat token updated session=%s', self.session_id)
 
     async def wait_for_token(self, generation: int, timeout: float, ask: bool = False) -> bool:
-        """Wait for a token newer than `generation`.
-
-        `ask` repeats a request to the socket for one, because nothing in this
-        process can rotate the pair itself: the client holds the refresh token.
-        Repeating matters when the first frame was sent to a socket that was
-        being replaced, which is exactly when a turn is most likely to be
-        running on a token that expired while nobody watched the clock.
-        """
         deadline = monotonic() + timeout
         next_ask = monotonic()
         while self._token_generation == generation:
@@ -140,7 +132,6 @@ class ChatHelper:
         return True
 
     async def _request_token(self) -> None:
-        """Ask the room's client for a fresh token; a lost frame must not fail the turn."""
         logger.warning('asking for a fresh token session=%s', self.session_id)
         try:
             await publish(self.room, token_required_event())
