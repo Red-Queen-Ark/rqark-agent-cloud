@@ -53,6 +53,16 @@ def error_event(message: str) -> dict:
     return agent_payload_to_send_json(AgentPayload('', (), Chunk('error', message)))
 
 
+def token_required_event() -> dict:
+    """A control frame asking the client to push a fresh data cloud token.
+
+    Never recorded: it is addressed to the live socket, not to the turn, and a
+    replay that carried it would ask a later reader for a token that is no
+    longer stale. Publishing it directly keeps it out of the replay log.
+    """
+    return agent_payload_to_send_json(AgentPayload('', (), Chunk('token_required', '')))
+
+
 async def _emit(room: str, agent_payload: AgentPayload) -> None:
     data = agent_payload_to_send_json(agent_payload)
     # Recorded first so the seq is stamped before anything reaches a reader.
