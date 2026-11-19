@@ -47,7 +47,6 @@
 - `ChatHelper.chat()` 喺 build agent 之前讀 session metadata、查 project、設
   `workspace.subdir`，再 `ensure()`。`ensure()` 會 `mkdir -p` 個 project 目錄。
 - project 已刪（`404`）就當冇 project，喺 `/workspace` 繼續，唔會令成個 turn 失敗。
-- `tasks/runner.py` 唔跟 project：task 冇 `project_id`，維持 `/workspace`。
 - `/api/workspace/*` 收 `project_id` query；冇帶就係整個 volume，同以前一樣。
 
 ### Session 綁 owner
