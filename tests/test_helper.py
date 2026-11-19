@@ -219,6 +219,49 @@ async def test_a_refresh_that_never_arrives_is_reported(helper_env, monkeypatch)
     assert raised.value.status_code == 401
 
 
+async def test_a_refused_token_asks_the_socket_for_a_fresh_one(helper_env, monkeypatch):
+    asked: list[tuple[str, dict]] = []
+
+    async def fake_publish(room, payload):
+        asked.append((room, payload))
+
+    monkeypatch.setattr(helper_module, 'publish', fake_publish)
+    monkeypatch.setattr(helper_module, 'TOKEN_REFRESH_WAIT', 0.2)
+    monkeypatch.setattr(helper_module, 'TOKEN_REQUEST_INTERVAL', 0.05)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    with pytest.raises(DataCloudError):
+        await helper._wait_for_fresh_token()
+
+    room, payload = asked[0]
+    assert room == room_key('u1', 's1')
+    assert payload['payload'] == {'type': 'token_required', 'content': ''}
+    # The request carries no seq: it belongs to the live socket, not the replay.
+    assert 'seq' not in payload
+    # Repeats while the socket stays silent, because the first frame can be lost
+    # with the socket it was sent to.
+    assert len(asked) > 1
+
+
+async def test_a_token_arriving_after_the_request_ends_the_wait(helper_env, monkeypatch):
+    async def fake_publish(room, payload):
+        return None
+
+    monkeypatch.setattr(helper_module, 'publish', fake_publish)
+    monkeypatch.setattr(helper_module, 'TOKEN_REFRESH_WAIT', 5.0)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    async def rotate():
+        await asyncio.sleep(0.05)
+        await helper.update_token('fresh')
+
+    rotating = asyncio.create_task(rotate())
+    await helper._wait_for_fresh_token()
+    await rotating
+
+    assert helper.token == 'fresh'
+
+
 async def test_successful_chat_is_persisted(helper_env):
     helper = helper_module.ChatHelper('s1', 't', 'u1')
     await helper.chat('hi', 'p', 'a')

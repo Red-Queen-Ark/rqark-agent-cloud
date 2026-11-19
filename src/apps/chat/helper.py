@@ -20,8 +20,9 @@ from rqark_sandbox import swap_agent
 from rqark_sandbox.project import load_project, project_subdir
 from rqark_sandbox.workspace import Workspace
 
-from src.apps.chat.event import RoomStream, connect_agent_event_to_room
+from src.apps.chat.event import RoomStream, connect_agent_event_to_room, token_required_event
 from src.apps.chat.recover import turn_from_frames
+from src.apps.chat.room import publish
 from src.apps.chat.scope import room_key
 from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_ENABLED, SANDBOX_IMAGE
 
@@ -31,6 +32,7 @@ SOURCE = 'AGENT_CLOUD'
 COMPACT_COMMAND = '/compact'
 TOKEN_REFRESH_WAIT = 90.0
 TOKEN_REFRESH_POLL = 0.05
+TOKEN_REQUEST_INTERVAL = 10.0
 
 
 async def _watch_progress(stream: RoomStream, idle: asyncio.Timeout) -> None:
@@ -117,17 +119,37 @@ class ChatHelper:
         self._token_generation += 1
         logger.info('chat token updated session=%s', self.session_id)
 
-    async def wait_for_token(self, generation: int, timeout: float) -> bool:
+    async def wait_for_token(self, generation: int, timeout: float, ask: bool = False) -> bool:
+        """Wait for a token newer than `generation`.
+
+        `ask` repeats a request to the socket for one, because nothing in this
+        process can rotate the pair itself: the client holds the refresh token.
+        Repeating matters when the first frame was sent to a socket that was
+        being replaced, which is exactly when a turn is most likely to be
+        running on a token that expired while nobody watched the clock.
+        """
         deadline = monotonic() + timeout
+        next_ask = monotonic()
         while self._token_generation == generation:
             if monotonic() >= deadline:
                 return False
+            if ask and monotonic() >= next_ask:
+                await self._request_token()
+                next_ask = monotonic() + TOKEN_REQUEST_INTERVAL
             await asyncio.sleep(TOKEN_REFRESH_POLL)
         return True
 
+    async def _request_token(self) -> None:
+        """Ask the room's client for a fresh token; a lost frame must not fail the turn."""
+        logger.warning('asking for a fresh token session=%s', self.session_id)
+        try:
+            await publish(self.room, token_required_event())
+        except Exception as error:
+            logger.warning('token request not delivered session=%s error=%s', self.session_id, error)
+
     async def _wait_for_fresh_token(self) -> None:
         generation = self._token_generation
-        if not await self.wait_for_token(generation, TOKEN_REFRESH_WAIT):
+        if not await self.wait_for_token(generation, TOKEN_REFRESH_WAIT, ask=True):
             raise DataCloudError(401, 'UNAUTHORIZED', 'the data cloud token expired and no fresh one arrived')
 
     def storage(self) -> CloudStorage:
@@ -371,7 +393,7 @@ class RefreshingStorage(CloudStorage):
             if error.status_code != 401:
                 raise
             logger.warning('session save refused, waiting for a fresh token session=%s', session.uuid)
-            if not await self._helper.wait_for_token(generation, TOKEN_REFRESH_WAIT):
+            if not await self._helper.wait_for_token(generation, TOKEN_REFRESH_WAIT, ask=True):
                 raise
             await super().save(session)
 
