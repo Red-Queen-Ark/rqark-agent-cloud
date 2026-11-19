@@ -4,7 +4,7 @@
 
 ### 工具
 
-`src/apps/sandbox/tools/`，喺 `ChatHelper.chat()` build agent 時經 `swap_agent()` 換入：
+`rqark_sandbox/tools/`，喺 `ChatHelper.chat()` build agent 時經 `swap_agent()` 換入：
 
 | 換走 | 沙盒版 |
 |---|---|
@@ -13,12 +13,12 @@
 | `subagent` | 重建，**遞迴**換埋入面啲 tool 同 prompt |
 | `web_fetch` `web_search` `plan_update` | 唔換，原物件直接回 |
 
-`swap_agent()` 係唯一入口（`src/apps/sandbox/__init__.py`），同時處理 prompts 同 tools，
+`swap_agent()` 係唯一入口（`rqark_sandbox/__init__.py`），同時處理 prompts 同 tools，
 避免將來只換一邊。`swap_tools()` 內部見到 `SubAgent` 會遞迴埋 prompts。
 
 ### Prompt
 
-`src/apps/sandbox/prompts/`。兩個 core prompt 有沙盒版，API 同 core 對齊
+`rqark_sandbox/prompts/`。兩個 core prompt 有沙盒版，API 同 core 對齊
 （`priority` 一樣、`params()` 回 `{}`，`to_dict()['name']` 唔變，config 相容）：
 
 | Core | 沙盒 |
@@ -142,6 +142,6 @@ core 嘅 `_clone_url()` 產生 `https://x-access-token:<token>@host/repo.git`，
   要收窄就加 `tecnativa/docker-socket-proxy`。
 - **孤兒清理**：container / network / volume 都有 `rqark.sandbox=1` label。
   未寫 reaper 去停 idle container（volume 要永遠保留）。
-- **`_locks` dict**：`src/apps/sandbox/workspace.py`，每個 user 加一條就唔清，長期會 leak。
+- **`_locks` dict**：`rqark_sandbox/workspace.py`，每個 user 加一條就唔清，長期會 leak。
 - **`--workers 4`**：`_runners` / `_locks` 係 per-process，同一 session 有機會被兩個
   worker 各起一個 runner。docker 係唯一真相所以唔會壞，但值得知。

@@ -10,9 +10,9 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from rqark_app.cloud.client import DataCloudError, RQArkDataCloudClient
 from rqark_app.types.cloud import CloudConfig
+from rqark_sandbox.project import load_project, project_subdir
+from rqark_sandbox.workspace import Entry, FileTooLargeError, Workspace, WorkspaceNotReadyError, is_sensitive, redact
 
-from src.apps.sandbox.project import load_project, project_subdir
-from src.apps.sandbox.workspace import Entry, FileTooLargeError, Workspace, WorkspaceNotReadyError, is_sensitive, redact
 from src.config import DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_IMAGE, WORKSPACE_MAX_BYTES, WORKSPACE_START_TIMEOUT
 from src.middleware.auth import AuthError, get_bearer, get_current_user
 
