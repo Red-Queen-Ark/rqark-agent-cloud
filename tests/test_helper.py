@@ -236,10 +236,7 @@ async def test_a_refused_token_asks_the_socket_for_a_fresh_one(helper_env, monke
     room, payload = asked[0]
     assert room == room_key('u1', 's1')
     assert payload['payload'] == {'type': 'token_required', 'content': ''}
-    # The request carries no seq: it belongs to the live socket, not the replay.
     assert 'seq' not in payload
-    # Repeats while the socket stays silent, because the first frame can be lost
-    # with the socket it was sent to.
     assert len(asked) > 1
 
 
