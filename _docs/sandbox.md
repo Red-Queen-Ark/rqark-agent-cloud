@@ -70,7 +70,7 @@
 
 ## Deploy
 
-Production 用 `docker-compose.production.yml`（tag `v*` 觸發 `.gitea/workflows/deploy.yaml`），
+Production 用 `docker-compose.production.yml`（tag `v*` 觸發 `.github/workflows/release.yml`），
 應用唔使帶 sandbox image 入 build context，只要 host daemon 拉到就得。
 
 Prerequisites：
