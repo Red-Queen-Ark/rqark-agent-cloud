@@ -11,7 +11,7 @@ from rqark_app.session.manager import SessionManager
 from rqark_app.session.storage import CloudStorage
 from rqark_app.sop.expand import expand
 from rqark_app.sop.manager import SopManager
-from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, SOURCE_KEY
+from rqark_app.tools.context import AGENT_KEY, CLIENT_KEY, COMPACT_KEY, SESSION_KEY, SOURCE_KEY
 from rqark_app.types.cloud import CloudConfig
 from rqark_app.types.session import message_from_dict, parse_dt
 from rqark_core.types.chat import Message, UserMessage
@@ -259,7 +259,7 @@ class ChatHelper:
         session = await app.session_mgr.get_or_create(self.session_id)
         await self._adopt_replay(app, session, replay or [])
         if content.strip() == COMPACT_COMMAND:
-            await self._compact(app, session)
+            await self._compact(app, session, agent_info.get('id'))
             self.persisted = True
             return session
         needs_title = bool(content) and not session.title
@@ -300,13 +300,14 @@ class ChatHelper:
         logger.info('sop expanded session=%s slug=%s', self.session_id, expanded[1])
         return expanded[0]
 
-    async def _compact(self, app: AgentApp, session: Session) -> None:
+    async def _compact(self, app: AgentApp, session: Session, agent_id: str | None) -> None:
         """Replace the conversation behind the next turn with a summary of it."""
         messages = session.get_last_chunk_for_chat()
         if not compact_messages(messages):
             logger.info('compact skipped on a conversation too short session=%s', self.session_id)
             return
-        summary = await app.compactor.get_summary(messages)
+        extras = {**(self.extras(agent_id) or {}), SESSION_KEY: session.uuid, COMPACT_KEY: True}
+        summary = await app.compactor.get_summary(messages, self.client, extras)
         if summary is None:
             logger.warning('compact failed session=%s', self.session_id)
             return
