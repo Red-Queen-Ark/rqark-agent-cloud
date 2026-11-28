@@ -229,6 +229,7 @@ Connection counts are Redis leases — one key per user, one per slot, `SET NX E
 | `DATA_CLOUD_URL` | `http://localhost:7302` | Where tokens are validated and stored data is read. |
 | `DATA_CLOUD_TIMEOUT` | `30` | Seconds per call to it. |
 | `CHAT_IDLE_TIMEOUT` | `900` | Seconds a room may sit idle before it is closed. |
+| `CHAT_RETRY_LIMIT` | `5` | Provider failures in a row, with no content between them, that end a turn. Content resets the count, so a flaky model that recovers is not cut off. |
 | `CHAT_IDLE_CHECK` | `5` | How often the sweep looks. |
 | `CHAT_SHUTDOWN_TIMEOUT` | `30` | How long a shutdown waits for pending writes. |
 | `IMAGE_MAX_BYTES` | `5242880` | Largest image accepted in a message. |
