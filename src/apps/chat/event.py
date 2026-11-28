@@ -27,6 +27,13 @@ def _is_subagent(ev: AgentPayload) -> bool:
 class RoomStream:
     content: list[str] = field(default_factory=list)
     last_activity: float = field(default_factory=monotonic)
+    # Consecutive failed attempts with no content between them. A turn that only
+    # fails is not making progress, so the watchdog reads this rather than the
+    # activity clock, which every failure also moves.
+    failures: int = field(default=0)
+    # Why the turn was given up on, filled in by the watchdog so the error the
+    # caller sees can say which bound it hit.
+    stall_reason: str = field(default='')
 
     @property
     def text(self) -> str:
@@ -34,6 +41,12 @@ class RoomStream:
 
     def touch(self) -> None:
         self.last_activity = monotonic()
+        self.failures = 0
+
+    def failed(self) -> None:
+        """Record one failed attempt. Any content progress resets the streak."""
+        self.last_activity = monotonic()
+        self.failures += 1
 
 
 def agent_payload_to_send_json(agent_payload: AgentPayload):
@@ -100,7 +113,7 @@ async def connect_agent_event_to_room(app: AgentApp, room: str) -> RoomStream:
 
     @app.on_error()
     async def error(ev: AgentPayload[Chunk]) -> None:
-        stream.touch()
+        stream.failed()
         if _is_subagent(ev):
             return
         logger.error('agent error room=%s agent=%s content=%s', room, ev.agent_id, _clip(ev.payload.content))
