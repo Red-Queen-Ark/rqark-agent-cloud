@@ -38,6 +38,12 @@ DATA_CLOUD_TIMEOUT = _float_env('DATA_CLOUD_TIMEOUT', '30')
 # Chat
 CHAT_IDLE_TIMEOUT = _float_env('CHAT_IDLE_TIMEOUT', '900')
 CHAT_IDLE_CHECK = _float_env('CHAT_IDLE_CHECK', '5')
+# How many provider failures in a row, with no content between them, end a turn.
+# A single provider that keeps refusing answers once a second, so the idle
+# timeout above would take 15 minutes to report something the user could see in
+# seconds. Content progress resets the streak, so a flaky model that recovers is
+# not cut off.
+CHAT_RETRY_LIMIT = _int_env('CHAT_RETRY_LIMIT', '5')
 CHAT_SHUTDOWN_TIMEOUT = _float_env('CHAT_SHUTDOWN_TIMEOUT', '30')
 
 # Images

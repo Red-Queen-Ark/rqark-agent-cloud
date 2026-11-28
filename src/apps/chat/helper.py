@@ -24,7 +24,7 @@ from src.apps.chat.event import RoomStream, connect_agent_event_to_room, token_r
 from src.apps.chat.recover import turn_from_frames
 from src.apps.chat.room import publish
 from src.apps.chat.scope import room_key
-from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_ENABLED, SANDBOX_IMAGE
+from src.config import CHAT_IDLE_CHECK, CHAT_IDLE_TIMEOUT, CHAT_RETRY_LIMIT, DATA_CLOUD_TIMEOUT, DATA_CLOUD_URL, SANDBOX_ENABLED, SANDBOX_IMAGE
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +36,22 @@ TOKEN_REQUEST_INTERVAL = 10.0
 
 
 async def _watch_progress(stream: RoomStream, idle: asyncio.Timeout) -> None:
-    """Extend the deadline only while the turn is really moving; a silent retry loop still trips it."""
+    """Extend the deadline only while the turn is really moving; a silent retry loop still trips it.
+
+    Two bounds end a turn. The idle timeout catches a turn that has gone quiet for
+    long enough that nothing is coming. The retry limit catches the other shape of
+    a dead turn: a provider that keeps failing, which is not silence (every
+    attempt reports an error) but is not progress either, and would otherwise run
+    for the whole idle timeout before anyone said so.
+    """
     loop = asyncio.get_running_loop()
     seen = stream.last_activity
     while True:
         await asyncio.sleep(CHAT_IDLE_CHECK)
+        if stream.failures >= CHAT_RETRY_LIMIT:
+            stream.stall_reason = f'the provider failed {stream.failures} times without producing anything'
+            idle.reschedule(loop.time())
+            return
         if stream.last_activity != seen:
             seen = stream.last_activity
             idle.reschedule(loop.time() + CHAT_IDLE_TIMEOUT)
@@ -279,9 +290,10 @@ class ChatHelper:
                     watchdog.cancel()
                     await asyncio.gather(watchdog, return_exceptions=True)
         except TimeoutError as error:
-            logger.error('chat stalled session=%s idle=%.0fs', self.session_id, CHAT_IDLE_TIMEOUT)
+            reason = stream.stall_reason or 'no progress'
+            logger.error('chat stalled session=%s reason=%s idle=%.0fs failures=%d', self.session_id, reason, CHAT_IDLE_TIMEOUT, stream.failures)
             await self._save_partial(app, session, saved, expanded, partial, images)
-            raise RuntimeError('chat stalled: no progress') from error
+            raise RuntimeError(f'chat stalled: {reason}') from error
         except asyncio.CancelledError:
             await self._save_partial(app, session, saved, expanded, partial, images)
             raise
