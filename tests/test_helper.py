@@ -120,9 +120,13 @@ class FakeCompactor:
 
     def __init__(self):
         self.summaries: list[list] = []
+        self.clients: list = []
+        self.extras: list[dict] = []
 
-    async def get_summary(self, messages):
+    async def get_summary(self, messages, cloud_client=None, extras=None):
         self.summaries.append(list(messages))
+        self.clients.append(cloud_client)
+        self.extras.append(dict(extras or {}))
         return SummaryMessage(self.summary) if self.summary is not None else None
 
 
@@ -858,6 +862,27 @@ async def test_the_compact_command_summarises_the_conversation_without_a_model_t
     assert len(app.compactor.summaries) == 1
     assert [message.content for message in app.session_mgr.sessions_map['s1'].history][-1] == 'a summary'
     assert helper.persisted is True
+
+
+async def test_the_compact_command_proxies_through_the_data_cloud(helper_env, monkeypatch):
+    def build(token):
+        client = FakeClient(token)
+        client.messages = [_user(0, 'm1', 'first'), _assistant(1, 'a1', 'answer'), _user(2, 'm2', 'second'), _assistant(3, 'a2', 'reply')]
+        return client
+
+    monkeypatch.setattr(helper_module, '_build_client', build)
+    helper = helper_module.ChatHelper('s1', 't', 'u1')
+
+    await helper.chat('/compact', 'p', 'a')
+
+    compactor = FakeApp.last.compactor
+    assert compactor.clients[0] is helper.client
+    extras = compactor.extras[0]
+    assert extras['data_cloud'] is helper.client
+    assert extras['agent_id'] == 'agent-1'
+    assert extras['source'] == 'AGENT_CLOUD'
+    assert extras['session_id'] == 's1'
+    assert extras['is_compaction'] is True
 
 
 async def test_the_compact_command_skips_an_empty_conversation(helper_env):
