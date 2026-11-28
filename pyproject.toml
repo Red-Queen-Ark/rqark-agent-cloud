@@ -1,15 +1,15 @@
 [project]
 name = "rqark-agent-cloud"
-version = "0.17.5"
+version = "0.17.6"
 description = "Red Queen Ark Agent Cloud - 24/7 agent service with chat WebSocket API, ASR and sandbox"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "uvicorn>=0.49.0",
     "fastapi>=0.141.1",
-    "rqark-app==0.13.1",
-    "rqark-sandbox==0.1.0",
-    "rqark-core==0.5.3",
+    "rqark-app==0.13.7",
+    "rqark-sandbox==0.1.1",
+    "rqark-core==0.5.5",
     "websockets>=17.1",
     "redis[hiredis]>=5.2.0",
     "pywebpush>=2.3.0",
